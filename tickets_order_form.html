@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Event Tickets Order Form</title>
+    <link rel="stylesheet" type="text/css" href="styles/normalize.css">
+    <link rel="stylesheet" type="text/css" href="styles/main.css">
+  </head>
+  <body>
+    <div id="frame">
+      <header>
+        <img src="images/ornament-logo.png" alt="New Year Central Logo" style="width: 400px;">
+        <div id="header-line-1">New Year Central</div>
+        <div id="header-line-2">For the child in all of us!</div>
+      </header>
+
+      <!-- Navigation -->
+      <nav id="nav_menu">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about_us.html">About Us</a></li>
+          <li><a href="products.html">Our Products</a></li>
+          <li><a href="tickets_order_form.html" class="current">Event Tickets</a></li>
+          <li><a href="contact_us.html">Contact Us</a></li>
+        </ul>
+      </nav>
+
+      <!-- Sidebar -->
+      <aside>
+        <div class="sidebar-title">Products of The Week...</div>
+        <ul>
+          <li><a href="assets/products/berry-garland.html">Natural Holly Berry Garland, 5f - $74.99</a></li>
+          <li><a href="assets/products/artificial-red-berry-garland.html">Artificial Red Berry and White Edge Holly Leaf Christmas Garland, 5.5f - $38.99</a></li>
+          <li><a href="assets/products/christmas-berries-stems.html">Christmas Berries Red Stems Evergreen Pine Branches, 8pcs - $15.99</a></li>
+        </ul>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main>
+        <h1>Order Event Tickets</h1>
+        <form name="order_form" action="place_order.html" method="post" novalidate>
+          <!-- Ticket Information Fieldset -->
+          <fieldset>
+            <legend>Ticket Information</legend>
+            <div class="form-row">
+              <label for="event">Event:</label>
+              <select id="event" name="event">
+                <option value="cookie_contest">Cookie Decoration Contest</option>
+                <option value="tree_contest">Tree Decoration Contest</option>
+                <option value="ride_along">Gift of Light Ride-Along</option>
+                <option value="breakfast_santa">Breakfast with Santa</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="order_type">Order Type:</label>
+              <select id="order_type" name="order_type">
+                <option value="member_package">Member Package</option>
+                <option value="donor_package">Donor Package</option>
+                <option value="single_ticket">Single Tickets</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="ticket_quantity">Number of Tickets:</label>
+              <input type="number" id="ticket_quantity" name="ticket_quantity" placeholder="Enter number of tickets" required>
+            </div>
+          </fieldset>
+
+          <!-- Personal Information Fieldset -->
+          <fieldset>
+            <legend>Personal Information</legend>
+            <div class="form-row">
+              <label for="first_name">First Name:</label>
+              <input type="text" id="first_name" name="first_name" placeholder="Enter first name" required>
+            </div>
+            <div class="form-row">
+              <label for="last_name">Last Name:</label>
+              <input type="text" id="last_name" name="last_name" placeholder="Enter last name" required>
+            </div>
+            <div class="form-row">
+              <label for="email">Email:</label>
+              <input type="email" id="email" name="email" placeholder="name@example.com" required autofocus>
+            </div>
+            <div class="form-row">
+              <label for="phone">Phone Number:</label>
+              <input type="tel" id="phone" name="phone" placeholder="999-999-9999" required 
+                     pattern="\d{3}-\d{3}-\d{4}" title="Format: 999-999-9999">
+            </div>
+            <div class="form-row">
+              <label for="city">City:</label>
+              <input type="text" id="city" name="city" placeholder="Enter city" required>
+            </div>
+            <div class="form-row">
+              <label for="province">Province:</label>
+              <input type="text" id="province" name="province" placeholder="e.g., ON" required
+                     pattern="[A-Za-z]{2}" title="Please enter a 2-letter province code">
+            </div>
+            <div class="form-row">
+              <label for="postal_code">Postal Code:</label>
+              <input type="text" id="postal_code" name="postal_code" placeholder="A1B2C3" required
+                     pattern="[A-Za-z0-9]{6}" title="Please enter exactly 6 alphanumeric characters">
+            </div>
+          </fieldset>
+
+          <!-- Payment Method Fieldset (Revised) -->
+          <fieldset id="payment_method">
+            <legend>Payment Method</legend>
+            <div class="radio-group">
+              <label class="radio-inline" for="bill_me">
+                <input type="radio" id="bill_me" name="payment_choice" value="bill_me" required>
+                Bill Me
+              </label>
+              <label class="radio-inline" for="credit_card">
+                <input type="radio" id="credit_card" name="payment_choice" value="credit_card">
+                Credit Card
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Credit Card Information Fieldset -->
+          <fieldset>
+            <legend>Credit Card Information</legend>
+            <div class="form-row">
+              <label for="card_type">Card Type:</label>
+              <select id="card_type" name="card_type">
+                <option value="visa">Visa</option>
+                <option value="mastercard">Master Card</option>
+                <option value="discover">Discover</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="card_number">Card Number:</label>
+              <input type="text" id="card_number" name="card_number" placeholder="1234123412341234" required
+                     pattern="\d{16}" title="Please enter exactly 16 digits">
+            </div>
+            <div class="form-row">
+              <label>Expiration Date:</label>
+              <select id="exp_month" name="exp_month">
+                <option value="January">January</option>
+                <option value="February">February</option>
+                <option value="March">March</option>
+                <option value="April">April</option>
+                <option value="May">May</option>
+                <option value="June">June</option>
+                <option value="July">July</option>
+                <option value="August">August</option>
+                <option value="September">September</option>
+                <option value="October">October</option>
+                <option value="November">November</option>
+                <option value="December">December</option>
+              </select>
+              <select id="exp_year" name="exp_year">
+                <option value="2021">2021</option>
+                <option value="2022">2022</option>
+                <option value="2023">2023</option>
+                <option value="2024">2024</option>
+                <option value="2025">2025</option>
+                <option value="2026">2026</option>
+                <option value="2027">2027</option>
+              </select>
+            </div>
+          </fieldset>
+
+          <!-- Submit Order Fieldset (Updated) -->
+          <fieldset id="submit_order_fieldset">
+            <legend>Submit Your Order</legend>
+            <div class="form-row">
+              <input type="submit" value="Submit">
+              <input type="reset" value="Reset Fields">
+            </div>
+          </fieldset>
+        </form>
+      </main>
+
+      <!-- Footer -->
+      <footer>
+        <p>&copy; 2021 New Year Central. Created by Johnny White.</p>
+      </footer>
+    </div>
+  </body>
+</html>
