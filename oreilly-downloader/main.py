@@ -260,19 +260,56 @@ async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | 
         if isinstance(data, list) and data:
             return data
         if isinstance(data, dict):
-            for key in ("chapters", "results", "toc", "table_of_contents", "items", "spine", "files"):
-                val = data.get(key)
-                if isinstance(val, list) and val:
-                    return val
-                if isinstance(val, dict) and val:
-                    items = list(val.values())
-                    if items and isinstance(items[0], dict):
-                        return items
+            # For EPUB metadata endpoints: try ALL fields and pick the richest result.
+            # A plain `/api/v2/epubs/{id}/` response has chapters, table_of_contents,
+            # spine, files — the first non-empty field may be tiny (e.g. one item in
+            # "chapters") while "files" or "table_of_contents" has all 20+ chapters.
+            if "/epubs/" in url:
+                best: list = []
+                # table_of_contents first — has real titles; flatten nested children
+                toc = data.get("table_of_contents")
+                if isinstance(toc, list):
+                    flat_toc = _flatten_toc(toc)
+                    if len(flat_toc) > len(best):
+                        best = flat_toc
+                # files — all EPUB manifest items (chapters + resources)
+                for key in ("files", "spine", "chapters", "items"):
+                    val = data.get(key)
+                    if isinstance(val, list) and len(val) > len(best):
+                        best = val
+                    elif isinstance(val, dict):
+                        items = list(val.values())
+                        if len(items) > len(best):
+                            best = items
+                if best:
+                    return best
+            else:
+                for key in ("chapters", "results", "toc", "table_of_contents", "items"):
+                    val = data.get(key)
+                    if isinstance(val, list) and val:
+                        return val
+                    if isinstance(val, dict) and val:
+                        items = list(val.values())
+                        if items and isinstance(items[0], dict):
+                            return items
             # Final fallback: recursive scan for anything chapter-like
             found = _find_chapters_in(data)
             if found:
                 return found
     return None
+
+
+def _flatten_toc(entries: list, depth: int = 0) -> list:
+    """Flatten a nested TOC list into a single ordered list, keeping all levels."""
+    result = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        result.append(entry)
+        children = entry.get("children") or entry.get("subitems") or []
+        if children and depth < 4:
+            result.extend(_flatten_toc(children, depth + 1))
+    return result
 
 
 def _looks_like_chapter(obj: object) -> bool:
@@ -325,6 +362,10 @@ def _normalize_epub_chapters(chapters: list, book_id: str, reader_base: str = ""
                 )
             if normalized.get("url"):
                 result.append(normalized)
+            # Recurse into children so nested TOC entries all become downloadable
+            children = ch.get("children") or ch.get("subitems") or []
+            if children:
+                result.extend(_normalize_epub_chapters(children, book_id, reader_base))
     return result
 
 
