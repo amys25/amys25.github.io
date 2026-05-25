@@ -17,6 +17,13 @@ from pydantic import BaseModel
 
 app = FastAPI(title="O'Reilly Book Downloader", version="1.0.0")
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"detail": f"Server error: {exc}"})
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -110,28 +117,53 @@ async def login(req: LoginRequest):
 
 @app.post("/api/verify-token")
 async def verify_token(req: TokenVerifyRequest):
-    """Validate a session cookie obtained via SSO/browser and return the user's name."""
-    async with _make_client(req.token) as client:
-        resp = await client.get(f"{OREILLY_BASE}/api/v2/me/")
+    """
+    Validate a session cookie from the browser (SSO flow).
+    Uses the search API as a lightweight auth probe since /api/v2/me/ is unreliable.
+    """
+    token = req.token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token cannot be empty.")
 
-    if resp.status_code == 401:
-        raise HTTPException(status_code=401, detail="Invalid or expired session token.")
-    if not resp.is_success:
-        raise HTTPException(status_code=401, detail="Could not verify session token.")
-
+    # Probe with a minimal search request — cheapest reliable authenticated call
     try:
-        data = resp.json()
-        name = (
-            data.get("name")
-            or data.get("first_name")
-            or data.get("username")
-            or data.get("email", "").split("@")[0]
-            or "User"
-        )
-    except Exception:
-        name = "User"
+        async with _make_client(token) as client:
+            probe = await client.get(
+                f"{OREILLY_BASE}/api/v2/search/",
+                params={"query": "python", "formats": "book", "limit": "1"},
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach O'Reilly: {exc}")
 
-    return {"token": req.token, "name": name}
+    if probe.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+    if not probe.is_success:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Session token rejected by O'Reilly (HTTP {probe.status_code}).",
+        )
+
+    # Try to fetch a display name — best-effort, never fail hard here
+    name = "User"
+    for path in ("/api/v2/me/", "/api/v2/user/", "/api/v2/account/"):
+        try:
+            async with _make_client(token) as client:
+                me = await client.get(f"{OREILLY_BASE}{path}")
+            if me.is_success and "json" in me.headers.get("content-type", ""):
+                data = me.json()
+                name = (
+                    data.get("name")
+                    or data.get("first_name")
+                    or data.get("username")
+                    or data.get("email", "").split("@")[0]
+                    or "User"
+                )
+                if name and name != "User":
+                    break
+        except Exception:
+            continue
+
+    return {"token": token, "name": name}
 
 
 @app.get("/api/search")
