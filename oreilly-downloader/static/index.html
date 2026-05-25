@@ -621,6 +621,10 @@ const state = {
   checked:      new Set(),
 };
 
+// Cache full search-result objects so the modal can use them even if
+// the book-detail API endpoint returns 404.
+const bookCache = {};
+
 /* ─────────────────────────────────────────────────────────────────────
    DOM refs
 ───────────────────────────────────────────────────────────────────── */
@@ -838,7 +842,8 @@ function renderBooks(books) {
   }
 
   grid.innerHTML = books.map(b => {
-    const id      = extractBookId(b);
+    const id = extractBookId(b);
+    if (id) bookCache[id] = b;   // cache for modal use
     const title   = escHtml(b.title || 'Untitled');
     const authors = escHtml((b.authors || []).map(a => a.name || a).join(', ') || 'Unknown author');
     const year    = (b.issued || '').slice(0, 4) || '';
@@ -893,13 +898,24 @@ async function openBook(bookId) {
   document.body.style.overflow = 'hidden';
   state.checked.clear();
 
-  // Reset modal
-  $('modal-title').textContent   = 'Loading…';
-  $('modal-authors').textContent = '';
-  $('modal-pub').textContent     = '';
-  $('modal-desc').textContent    = '';
+  // Pre-fill header from search cache immediately (no spinner needed for meta)
+  const cached = bookCache[bookId] || null;
   $('modal-cover-wrap').innerHTML = '📖';
   $('modal-cover-wrap').className = 'modal-cover-ph';
+  $('modal-title').textContent    = cached?.title   || 'Loading…';
+  $('modal-authors').textContent  = cached ? `By ${(cached.authors || []).map(a => a.name || a).join(', ') || 'Unknown'}` : '';
+  $('modal-pub').textContent      = cached ? [cached.publishers?.[0]?.name, (cached.issued || '').slice(0,4)].filter(Boolean).join(' · ') : '';
+  $('modal-desc').textContent     = cached ? stripTags(cached.description || '') : '';
+  if (cached) {
+    const cover = cached.cover_url || cached.thumbnail_url || cached.cover || '';
+    if (cover) {
+      const img = document.createElement('img');
+      img.className = 'modal-cover'; img.id = 'modal-cover-wrap'; img.src = cover; img.alt = '';
+      img.onerror = () => { const d = document.createElement('div'); d.className='modal-cover-ph'; d.id='modal-cover-wrap'; d.textContent='📖'; img.replaceWith(d); };
+      $('modal-cover-wrap').replaceWith(img);
+    }
+  }
+
   $('chapter-list').innerHTML = '<div class="no-chapters"><span class="spinner dark"></span>&nbsp;Loading chapters…</div>';
   $('btn-download').disabled = true;
   $('download-msg').textContent = '';
@@ -907,10 +923,15 @@ async function openBook(bookId) {
 
   try {
     const book = await apiGet(`/api/book/${encodeURIComponent(bookId)}`, { token: state.token });
-    state.currentBook = book;
-    populateModal(book);
+
+    // Merge API response with cached search data so we always have full metadata
+    state.currentBook = Object.assign({}, cached || {}, book);
+
+    // If the API response filled in the title (detail endpoint worked), update header
+    if (book.title) populateModal(state.currentBook);
+    else            populateChaptersOnly(state.currentBook);
   } catch (err) {
-    $('modal-title').textContent = 'Failed to load book';
+    $('modal-title').textContent = cached?.title || 'Failed to load book';
     $('chapter-list').innerHTML = `
       <div class="no-chapters" style="color:#c0392b;text-align:left;padding:1rem">
         <strong>Error:</strong> ${escHtml(err.message)}<br>
@@ -953,6 +974,16 @@ function populateModal(book) {
   const chapters = extractChapters(book);
   state.chapters = chapters;
   state.checked  = new Set(chapters.map(c => c.url)); // select all by default
+  renderChapterList();
+  $('btn-download').disabled = state.checked.size === 0;
+  updateSelCount();
+}
+
+// Used when the book detail endpoint 404'd but chapters came back via fallback
+function populateChaptersOnly(book) {
+  const chapters = extractChapters(book);
+  state.chapters = chapters;
+  state.checked  = new Set(chapters.map(c => c.url));
   renderChapterList();
   $('btn-download').disabled = state.checked.size === 0;
   updateSelCount();

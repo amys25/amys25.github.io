@@ -189,34 +189,53 @@ async def search(query: str, token: str, page: int = 0, limit: int = 12):
 
 @app.get("/api/book/{book_id:path}")
 async def get_book(book_id: str, token: str):
-    """Return full book metadata including the chapter list.
-    book_id may be an ISBN, a slug, or a URL-encoded path segment.
-    We try several endpoint patterns because O'Reilly's API accepts
-    different identifier forms depending on the book.
+    """Return full book metadata + chapter list.
+    Tries the book detail endpoint first; if that 404s (common for newer ISBNs)
+    falls back to the dedicated chapter-list endpoint so the modal still works.
     """
-    candidates = [
-        f"{OREILLY_BASE}/api/v2/book/{book_id}/",
-        f"{OREILLY_BASE}/api/v2/book/{book_id}",
-    ]
-
-    last_status = None
     async with _make_client(token) as client:
-        for url in candidates:
+        # 1. Try book detail (has metadata + chapters embedded)
+        for url in (
+            f"{OREILLY_BASE}/api/v2/book/{book_id}/",
+            f"{OREILLY_BASE}/api/v2/book/{book_id}",
+        ):
             try:
                 resp = await client.get(url)
             except httpx.RequestError as exc:
                 raise HTTPException(502, f"Could not reach O'Reilly: {exc}")
-
             if resp.status_code == 401:
                 raise HTTPException(401, "Session expired — please log in again.")
             if resp.is_success:
                 return resp.json()
-            last_status = resp.status_code
+
+        # 2. Fall back: fetch chapters separately and return a minimal book object
+        chapters_resp = None
+        for url in (
+            f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
+            f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
+        ):
+            try:
+                r = await client.get(url)
+            except httpx.RequestError:
+                continue
+            if r.status_code == 401:
+                raise HTTPException(401, "Session expired — please log in again.")
+            if r.is_success:
+                chapters_resp = r
+                break
+
+    if chapters_resp is not None:
+        data = chapters_resp.json()
+        # Normalise into the same shape the frontend expects
+        chapters = data if isinstance(data, list) else data.get("results", data.get("chapters", []))
+        return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
 
     raise HTTPException(
         404,
-        f"Book not found (id: {book_id!r}, last HTTP status: {last_status}).",
+        f"Could not load book '{book_id}'. "
+        "The book may not be accessible with your current subscription.",
     )
+
 
 
 # ---------------------------------------------------------------------------
