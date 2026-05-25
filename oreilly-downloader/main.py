@@ -258,11 +258,41 @@ async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | 
     return None
 
 
+def _looks_like_chapter(obj: object) -> bool:
+    """Return True if obj looks like a chapter/TOC entry."""
+    if not isinstance(obj, dict):
+        return False
+    return bool({"url", "href", "title", "filename", "natural_key", "id"} & obj.keys())
+
+
+def _find_chapters_in(obj: object, depth: int = 0) -> list | None:
+    """Recursively search any parsed JSON value for a chapters/toc list."""
+    if depth > 8:
+        return None
+    if isinstance(obj, list):
+        if obj and _looks_like_chapter(obj[0]):
+            return obj
+        for item in obj:
+            found = _find_chapters_in(item, depth + 1)
+            if found:
+                return found
+    elif isinstance(obj, dict):
+        for key in ("chapters", "toc", "table_of_contents", "items", "children"):
+            val = obj.get(key)
+            if isinstance(val, list) and val and _looks_like_chapter(val[0]):
+                return val
+        for val in obj.values():
+            found = _find_chapters_in(val, depth + 1)
+            if found:
+                return found
+    return None
+
+
 async def _chapters_from_web_reader(client: httpx.AsyncClient, book_id: str) -> list:
     """
-    Last-resort: load the HTML web-reader page and pull the TOC out of the
-    embedded JSON blob that O'Reilly's React/Next.js app injects at boot time.
-    Works for any book the user can open in their browser.
+    Fetch the HTML web-reader page and extract the chapter list from any
+    embedded JSON — works regardless of whether the app uses Next.js, Redux,
+    or plain window.* assignments.
     """
     for slug in ("-", "book", "title"):
         url = f"{OREILLY_BASE}/library/view/{slug}/{book_id}/"
@@ -275,36 +305,63 @@ async def _chapters_from_web_reader(client: httpx.AsyncClient, book_id: str) -> 
 
         html = resp.text
 
-        # Next.js: <script id="__NEXT_DATA__" type="application/json">…</script>
-        m = re.search(
-            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>\s*(\{.+?\})\s*</script>',
-            html, re.DOTALL,
-        )
-        if m:
-            try:
-                nd = _json.loads(m.group(1))
-                pp = nd.get("props", {}).get("pageProps", {})
-                book_node = pp.get("book") or pp.get("bookData") or {}
-                for key in ("toc", "chapters", "table_of_contents"):
-                    val = book_node.get(key)
-                    if isinstance(val, list) and val:
-                        return val
-            except Exception:
-                pass
+        # 1. Try every <script> tag — parse content as JSON or look for
+        #    window.VAR = <json> and window.VAR = [<json>] assignments.
+        for script_body in re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL):
+            script_body = script_body.strip()
+            if not script_body or "chapters" not in script_body:
+                continue
 
-        # Loose scan: find any JSON array assigned to a toc/chapters key
-        for pattern in (
-            r'"toc"\s*:\s*(\[.+?\])\s*[,}\]]',
-            r'"chapters"\s*:\s*(\[.+?\])\s*[,}\]]',
-        ):
-            mm = re.search(pattern, html, re.DOTALL)
-            if mm:
+            # Direct JSON object/array
+            for prefix in ("{", "["):
+                if script_body.startswith(prefix):
+                    try:
+                        data = _json.loads(script_body)
+                        found = _find_chapters_in(data)
+                        if found:
+                            return found
+                    except Exception:
+                        pass
+
+            # window.VAR = {...} or window.VAR = [...]
+            for m in re.finditer(
+                r"window\.\w+\s*=\s*(\{[\s\S]+?\}|\[[\s\S]+?\])\s*;",
+                script_body,
+            ):
                 try:
-                    val = _json.loads(mm.group(1))
-                    if isinstance(val, list) and val:
-                        return val
+                    data = _json.loads(m.group(1))
+                    found = _find_chapters_in(data)
+                    if found:
+                        return found
                 except Exception:
                     pass
+
+            # __STORE__, __STATE__, __REDUX_STATE__, etc.
+            for m in re.finditer(
+                r'(?:__STORE__|__STATE__|__REDUX_STATE__|__INITIAL_STATE__|__DATA__)'
+                r'\s*=\s*(\{[\s\S]+?\})\s*[;<]',
+                script_body,
+            ):
+                try:
+                    data = _json.loads(m.group(1))
+                    found = _find_chapters_in(data)
+                    if found:
+                        return found
+                except Exception:
+                    pass
+
+        # 2. JSON-LD structured data
+        for ld in re.findall(
+            r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.DOTALL,
+        ):
+            try:
+                data = _json.loads(ld)
+                found = _find_chapters_in(data)
+                if found:
+                    return found
+            except Exception:
+                pass
 
     return []
 
@@ -349,6 +406,24 @@ async def debug_book(request: Request, book_id: str, token: str):
                         info["has___NEXT_DATA__"] = "__NEXT_DATA__" in html
                         info["has_toc_key"] = '"toc"' in html
                         info["has_chapters_key"] = '"chapters"' in html
+                        # Show up to 3 snippets around "chapters" so we can
+                        # see the surrounding structure
+                        snippets = []
+                        search_from = 0
+                        for _ in range(3):
+                            idx = html.find('"chapters"', search_from)
+                            if idx < 0:
+                                break
+                            snippets.append(html[max(0, idx-60): idx+200])
+                            search_from = idx + 10
+                        if snippets:
+                            info["chapters_snippets"] = snippets
+                        # List all window.XXX assignments (shows embedded state vars)
+                        info["window_vars"] = re.findall(
+                            r'window\.(\w+)\s*=', html)[:20]
+                        # List script type attributes
+                        info["script_types"] = list(set(
+                            re.findall(r'<script[^>]+type=["\']([^"\']+)["\']', html)))
             except Exception as e:
                 info = {"error": str(e)}
             results[key] = info
