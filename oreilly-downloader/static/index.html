@@ -814,6 +814,22 @@ $('inp-search').addEventListener('keydown', e => {
 /* ─────────────────────────────────────────────────────────────────────
    Render book grid
 ───────────────────────────────────────────────────────────────────── */
+function extractBookId(b) {
+  // Prefer the ID embedded in the API url field — most reliable source.
+  // e.g. "https://learning.oreilly.com/api/v2/book/9781491912058/"
+  if (b.url) {
+    const m = b.url.match(/\/book\/([^\/\?]+)/);
+    if (m && m[1]) return m[1];
+  }
+  // Fall back to ourn: "urn:orm:book:9781491912058"
+  if (b.ourn) {
+    const m = b.ourn.match(/:([^:]+)$/);
+    if (m && m[1]) return m[1];
+  }
+  // Last resort: id or archive_id fields directly
+  return b.archive_id || b.id || '';
+}
+
 function renderBooks(books) {
   const grid = $('book-grid');
   if (!books.length) {
@@ -822,7 +838,7 @@ function renderBooks(books) {
   }
 
   grid.innerHTML = books.map(b => {
-    const id      = b.id || b.archive_id || '';
+    const id      = extractBookId(b);
     const title   = escHtml(b.title || 'Untitled');
     const authors = escHtml((b.authors || []).map(a => a.name || a).join(', ') || 'Unknown author');
     const year    = (b.issued || '').slice(0, 4) || '';
@@ -895,7 +911,11 @@ async function openBook(bookId) {
     populateModal(book);
   } catch (err) {
     $('modal-title').textContent = 'Failed to load book';
-    $('chapter-list').innerHTML = `<div class="no-chapters" style="color:#c0392b">${escHtml(err.message)}</div>`;
+    $('chapter-list').innerHTML = `
+      <div class="no-chapters" style="color:#c0392b;text-align:left;padding:1rem">
+        <strong>Error:</strong> ${escHtml(err.message)}<br>
+        <span style="font-size:.8rem;color:#888;margin-top:.4rem;display:block">Book ID: ${escHtml(bookId)}</span>
+      </div>`;
     toast(err.message, 'error');
   }
 }

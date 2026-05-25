@@ -187,18 +187,36 @@ async def search(query: str, token: str, page: int = 0, limit: int = 12):
     return resp.json()
 
 
-@app.get("/api/book/{book_id}")
+@app.get("/api/book/{book_id:path}")
 async def get_book(book_id: str, token: str):
-    """Return full book metadata including the chapter list."""
-    async with _make_client(token) as client:
-        resp = await client.get(f"{OREILLY_BASE}/api/v2/book/{book_id}/")
+    """Return full book metadata including the chapter list.
+    book_id may be an ISBN, a slug, or a URL-encoded path segment.
+    We try several endpoint patterns because O'Reilly's API accepts
+    different identifier forms depending on the book.
+    """
+    candidates = [
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}",
+    ]
 
-    if resp.status_code == 401:
-        raise HTTPException(401, "Session expired — please log in again.")
-    if resp.status_code == 404:
-        raise HTTPException(404, "Book not found.")
-    resp.raise_for_status()
-    return resp.json()
+    last_status = None
+    async with _make_client(token) as client:
+        for url in candidates:
+            try:
+                resp = await client.get(url)
+            except httpx.RequestError as exc:
+                raise HTTPException(502, f"Could not reach O'Reilly: {exc}")
+
+            if resp.status_code == 401:
+                raise HTTPException(401, "Session expired — please log in again.")
+            if resp.is_success:
+                return resp.json()
+            last_status = resp.status_code
+
+    raise HTTPException(
+        404,
+        f"Book not found (id: {book_id!r}, last HTTP status: {last_status}).",
+    )
 
 
 # ---------------------------------------------------------------------------
