@@ -392,6 +392,19 @@
       padding: 1.1rem 1.3rem;
       display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap;
     }
+    /* Diagnostic panel */
+    .diag-panel {
+      margin-top: 1rem;
+      border: 1.5px solid var(--border); border-radius: 8px;
+      background: #fafafa; padding: .9rem 1rem;
+    }
+    .diag-panel pre {
+      font-family: monospace; font-size: .75rem; color: #333;
+      white-space: pre-wrap; word-break: break-all;
+      max-height: 260px; overflow-y: auto;
+      margin: .6rem 0 0;
+    }
+    .diag-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
     .format-group {
       display: flex; gap: .6rem; align-items: center; flex: 1;
     }
@@ -965,9 +978,22 @@ async function openBook(bookId) {
   } catch (err) {
     $('modal-title').textContent = cached?.title || 'Failed to load book';
     $('chapter-list').innerHTML = `
-      <div class="no-chapters" style="color:#c0392b;text-align:left;padding:1rem">
-        <strong>Error:</strong> ${escHtml(err.message)}<br>
-        <span style="font-size:.8rem;color:#888;margin-top:.4rem;display:block">Book ID: ${escHtml(bookId)}</span>
+      <div style="padding:1rem">
+        <div style="color:#c0392b;margin-bottom:.8rem">
+          <strong>Error:</strong> ${escHtml(err.message)}
+        </div>
+        <div class="diag-panel">
+          <div style="font-size:.82rem;font-weight:600;color:#444">Diagnostic</div>
+          <div class="diag-actions">
+            <button class="btn-sm" id="btn-run-diag" onclick="runDiagnostic('${escHtml(bookId)}')">
+              Run diagnostic
+            </button>
+            <button class="btn-sm hidden" id="btn-copy-diag" onclick="copyDiag()">
+              Copy results
+            </button>
+          </div>
+          <pre id="diag-output" class="hidden"></pre>
+        </div>
       </div>`;
     toast(err.message, 'error');
   }
@@ -1172,6 +1198,37 @@ function triggerDownload(blob, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Diagnostic
+───────────────────────────────────────────────────────────────────── */
+async function runDiagnostic(bookId) {
+  const btn = $('btn-run-diag');
+  const out = $('diag-output');
+  btn.textContent = 'Running…';
+  btn.disabled = true;
+  out.textContent = '';
+  out.classList.remove('hidden');
+
+  try {
+    const data = await apiGet(`/api/debug/${encodeURIComponent(bookId)}`, { token: state.token });
+    out.textContent = JSON.stringify(data, null, 2);
+    $('btn-copy-diag').classList.remove('hidden');
+  } catch (err) {
+    out.textContent = `Diagnostic failed: ${err.message}`;
+  } finally {
+    btn.textContent = 'Run diagnostic';
+    btn.disabled = false;
+  }
+}
+
+function copyDiag() {
+  const text = $('diag-output')?.textContent || '';
+  navigator.clipboard.writeText(text).then(
+    () => toast('Diagnostic results copied to clipboard', 'success'),
+    () => toast('Copy failed — please select and copy the text manually', 'error'),
+  );
 }
 
 /* ─────────────────────────────────────────────────────────────────────
