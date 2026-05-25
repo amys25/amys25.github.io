@@ -40,8 +40,10 @@ BASE_HEADERS = {
 
 
 def _make_client(token: str) -> httpx.AsyncClient:
+    # Send token under both names — O'Reilly uses 'groot_sessionid' in newer
+    # versions and 'sessionid' in older ones.
     return httpx.AsyncClient(
-        cookies={"sessionid": token},
+        cookies={"sessionid": token, "groot_sessionid": token},
         headers=BASE_HEADERS,
         follow_redirects=True,
         timeout=httpx.Timeout(30.0, read=90.0),
