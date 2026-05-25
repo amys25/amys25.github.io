@@ -166,25 +166,46 @@ async def verify_token(req: TokenVerifyRequest):
     return {"token": token, "name": name}
 
 
+def _check_auth(resp) -> None:
+    """Raise a clean 401 for any response that indicates an expired/invalid session."""
+    if resp.status_code in (401, 403):
+        raise HTTPException(401, "Session expired — please log in again.")
+    # O'Reilly sometimes redirects expired sessions to the login page (HTML)
+    ct = resp.headers.get("content-type", "")
+    if resp.is_redirect or ("text/html" in ct and resp.is_success):
+        raise HTTPException(401, "Session expired — please log in again.")
+
+
 @app.get("/api/search")
 async def search(query: str, token: str, page: int = 0, limit: int = 12):
     """Search O'Reilly for books matching *query*."""
-    async with _make_client(token) as client:
-        resp = await client.get(
-            f"{OREILLY_BASE}/api/v2/search/",
-            params={
-                "query": query,
-                "formats": "book",
-                "limit": limit,
-                "offset": page * limit,
-                "include_facets": "false",
-            },
+    try:
+        async with _make_client(token) as client:
+            resp = await client.get(
+                f"{OREILLY_BASE}/api/v2/search/",
+                params={
+                    "query": query,
+                    "formats": "book",
+                    "limit": limit,
+                    "offset": page * limit,
+                    "include_facets": "false",
+                },
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Could not reach O'Reilly: {exc}")
+
+    _check_auth(resp)
+
+    if not resp.is_success:
+        raise HTTPException(
+            resp.status_code,
+            f"O'Reilly search returned HTTP {resp.status_code}.",
         )
 
-    if resp.status_code == 401:
-        raise HTTPException(401, "Session expired — please log in again.")
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        return resp.json()
+    except Exception:
+        raise HTTPException(502, "O'Reilly returned an unexpected response. Try again.")
 
 
 @app.get("/api/book/{book_id:path}")
@@ -203,10 +224,12 @@ async def get_book(book_id: str, token: str):
                 resp = await client.get(url)
             except httpx.RequestError as exc:
                 raise HTTPException(502, f"Could not reach O'Reilly: {exc}")
-            if resp.status_code == 401:
-                raise HTTPException(401, "Session expired — please log in again.")
+            _check_auth(resp)
             if resp.is_success:
-                return resp.json()
+                try:
+                    return resp.json()
+                except Exception:
+                    pass  # malformed JSON — try next pattern
 
         # 2. Fall back: fetch chapters separately and return a minimal book object
         chapters_resp = None
@@ -218,8 +241,7 @@ async def get_book(book_id: str, token: str):
                 r = await client.get(url)
             except httpx.RequestError:
                 continue
-            if r.status_code == 401:
-                raise HTTPException(401, "Session expired — please log in again.")
+            _check_auth(r)
             if r.is_success:
                 chapters_resp = r
                 break
