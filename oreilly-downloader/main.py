@@ -4,6 +4,7 @@ Requires an active O'Reilly Learning subscription.
 """
 
 import io
+import json as _json
 import os
 import re
 from typing import List
@@ -208,14 +209,94 @@ async def search(query: str, token: str, page: int = 0, limit: int = 12):
         raise HTTPException(502, "O'Reilly returned an unexpected response. Try again.")
 
 
+async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | None:
+    """Try every known REST endpoint that might return a chapter / TOC list."""
+    candidates = [
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/flat-toc/",
+        f"{OREILLY_BASE}/api/v1/book/{book_id}/chapter/",
+        f"{OREILLY_BASE}/api/v1/book/{book_id}/",
+    ]
+    for url in candidates:
+        try:
+            r = await client.get(url)
+        except httpx.RequestError:
+            continue
+        _check_auth(r)
+        if not r.is_success:
+            continue
+        try:
+            data = r.json()
+        except Exception:
+            continue
+        # Normalise to a list
+        if isinstance(data, list) and data:
+            return data
+        if isinstance(data, dict):
+            for key in ("chapters", "results", "toc", "table_of_contents", "items"):
+                val = data.get(key)
+                if isinstance(val, list) and val:
+                    return val
+    return None
+
+
+async def _chapters_from_web_reader(client: httpx.AsyncClient, book_id: str) -> list:
+    """
+    Last-resort: load the HTML web-reader page and pull the TOC out of the
+    embedded JSON blob that O'Reilly's React/Next.js app injects at boot time.
+    Works for any book the user can open in their browser.
+    """
+    for slug in ("-", "book", "title"):
+        url = f"{OREILLY_BASE}/library/view/{slug}/{book_id}/"
+        try:
+            resp = await client.get(url, timeout=20.0)
+        except httpx.RequestError:
+            continue
+        if not resp.is_success:
+            continue
+
+        html = resp.text
+
+        # Next.js: <script id="__NEXT_DATA__" type="application/json">…</script>
+        m = re.search(
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>\s*(\{.+?\})\s*</script>',
+            html, re.DOTALL,
+        )
+        if m:
+            try:
+                nd = _json.loads(m.group(1))
+                pp = nd.get("props", {}).get("pageProps", {})
+                book_node = pp.get("book") or pp.get("bookData") or {}
+                for key in ("toc", "chapters", "table_of_contents"):
+                    val = book_node.get(key)
+                    if isinstance(val, list) and val:
+                        return val
+            except Exception:
+                pass
+
+        # Loose scan: find any JSON array assigned to a toc/chapters key
+        for pattern in (
+            r'"toc"\s*:\s*(\[.+?\])\s*[,}\]]',
+            r'"chapters"\s*:\s*(\[.+?\])\s*[,}\]]',
+        ):
+            mm = re.search(pattern, html, re.DOTALL)
+            if mm:
+                try:
+                    val = _json.loads(mm.group(1))
+                    if isinstance(val, list) and val:
+                        return val
+                except Exception:
+                    pass
+
+    return []
+
+
 @app.get("/api/book/{book_id:path}")
 async def get_book(book_id: str, token: str):
-    """Return full book metadata + chapter list.
-    Tries the book detail endpoint first; if that 404s (common for newer ISBNs)
-    falls back to the dedicated chapter-list endpoint so the modal still works.
-    """
+    """Return full book metadata + chapter list using a cascade of fallbacks."""
     async with _make_client(token) as client:
-        # 1. Try book detail (has metadata + chapters embedded)
+        # 1. Book-detail endpoint — works for older ISBNs, has metadata + chapters
         for url in (
             f"{OREILLY_BASE}/api/v2/book/{book_id}/",
             f"{OREILLY_BASE}/api/v2/book/{book_id}",
@@ -229,33 +310,23 @@ async def get_book(book_id: str, token: str):
                 try:
                     return resp.json()
                 except Exception:
-                    pass  # malformed JSON — try next pattern
+                    pass
 
-        # 2. Fall back: fetch chapters separately and return a minimal book object
-        chapters_resp = None
-        for url in (
-            f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
-            f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
-        ):
-            try:
-                r = await client.get(url)
-            except httpx.RequestError:
-                continue
-            _check_auth(r)
-            if r.is_success:
-                chapters_resp = r
-                break
+        # 2. Chapter-list API endpoints (newer books, various patterns)
+        chapters = await _chapters_from_api(client, book_id)
+        if chapters is not None:
+            return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
 
-    if chapters_resp is not None:
-        data = chapters_resp.json()
-        # Normalise into the same shape the frontend expects
-        chapters = data if isinstance(data, list) else data.get("results", data.get("chapters", []))
-        return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
+        # 3. Web-reader HTML scrape — works for anything the browser can open
+        chapters = await _chapters_from_web_reader(client, book_id)
+        if chapters:
+            return {"id": book_id, "title": "", "authors": [], "toc": chapters}
 
     raise HTTPException(
         404,
-        f"Could not load book '{book_id}'. "
-        "The book may not be accessible with your current subscription.",
+        f"Could not retrieve chapter list for book '{book_id}'. "
+        "Try opening the book in your browser first to ensure your session has access, "
+        "then get a fresh sessionid cookie.",
     )
 
 
