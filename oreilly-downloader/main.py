@@ -230,8 +230,12 @@ async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | 
     """Try every known REST endpoint that might return a chapter / TOC list."""
     candidates = [
         f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/chapters/",
         f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
         f"{OREILLY_BASE}/api/v2/book/{book_id}/flat-toc/",
+        f"{OREILLY_BASE}/api/v2/book/orm:{book_id}/",
+        f"{OREILLY_BASE}/api/v2/titles/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v2/titles/{book_id}/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/chapter/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/",
     ]
@@ -375,8 +379,15 @@ async def debug_book(request: Request, book_id: str, token: str):
         f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
         f"{OREILLY_BASE}/api/v2/book/{book_id}/flat-toc/",
         f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/chapters/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/chapter/",
+        # ORM-prefixed identifiers
+        f"{OREILLY_BASE}/api/v2/book/orm:{book_id}/",
+        f"{OREILLY_BASE}/api/v2/titles/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v2/titles/{book_id}/",
+        # EPub / content package endpoints
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/epub/",
         f"{OREILLY_BASE}/library/view/-/{book_id}/",
     ]
     results = {}
@@ -406,27 +417,50 @@ async def debug_book(request: Request, book_id: str, token: str):
                         info["has___NEXT_DATA__"] = "__NEXT_DATA__" in html
                         info["has_toc_key"] = '"toc"' in html
                         info["has_chapters_key"] = '"chapters"' in html
-                        # Show up to 3 snippets around "chapters" so we can
-                        # see the surrounding structure
-                        snippets = []
-                        search_from = 0
-                        for _ in range(3):
-                            idx = html.find('"chapters"', search_from)
-                            if idx < 0:
-                                break
-                            snippets.append(html[max(0, idx-60): idx+200])
-                            search_from = idx + 10
-                        if snippets:
-                            info["chapters_snippets"] = snippets
-                        # List all window.XXX assignments (shows embedded state vars)
-                        info["window_vars"] = re.findall(
-                            r'window\.(\w+)\s*=', html)[:20]
-                        # List script type attributes
+                        info["window_vars"] = re.findall(r'window\.(\w+)\s*=', html)[:20]
                         info["script_types"] = list(set(
                             re.findall(r'<script[^>]+type=["\']([^"\']+)["\']', html)))
+                        # Parse window.orm (the Redux initial state) and show its
+                        # top-level keys + any keys that look book/toc related
+                        for wm in re.finditer(r'window\.orm\s*=\s*', html):
+                            pos = wm.end()
+                            if pos < len(html) and html[pos] == '{':
+                                try:
+                                    data, _ = _json.JSONDecoder().raw_decode(html, pos)
+                                    if isinstance(data, dict):
+                                        info["window_orm_top_keys"] = sorted(data.keys())
+                                        # Recurse one level to show sub-keys
+                                        detail = {}
+                                        for k, v in data.items():
+                                            if isinstance(v, dict):
+                                                detail[k] = sorted(v.keys())
+                                        info["window_orm_detail"] = detail
+                                except Exception as ex:
+                                    info["window_orm_parse_error"] = str(ex)
+                            break   # only inspect the first window.orm
             except Exception as e:
                 info = {"error": str(e)}
             results[key] = info
+    # Also fetch the search result for this book to expose all its fields —
+    # it might contain a chapters_url or content_url we haven't tried.
+    try:
+        sr = await _make_client(token, xc).__aenter__()
+        search_resp = await sr.get(
+            f"{OREILLY_BASE}/api/v2/search/",
+            params={"query": book_id, "formats": "book", "limit": "5"},
+        )
+        await sr.aclose()
+        if search_resp.is_success:
+            for item in search_resp.json().get("results", []):
+                if book_id in str(item.get("id", "")) or book_id in str(item.get("archive_id", "")):
+                    results["_search_result_fields"] = {
+                        k: v for k, v in item.items()
+                        if not isinstance(v, str) or len(v) < 300
+                    }
+                    break
+    except Exception as e:
+        results["_search_result_error"] = str(e)
+
     return {"book_id": book_id, "extra_cookies_sent": bool(xc), "results": results}
 
 
