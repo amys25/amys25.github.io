@@ -282,18 +282,24 @@ def _looks_like_chapter(obj: object) -> bool:
     return bool({"url", "href", "title", "filename", "natural_key", "id"} & obj.keys())
 
 
-def _normalize_epub_chapters(chapters: list, book_id: str) -> list:
+def _normalize_epub_chapters(chapters: list, book_id: str, reader_base: str = "") -> list:
     """
     Ensure every chapter entry has a 'url' field so the download flow can fetch it.
     EPUB entries typically have 'href' (relative path) but no 'url'.
+    reader_base: e.g. '/library/view/aws-certified-cloud/9798341640214/'
     """
+    if not reader_base:
+        reader_base = f"/library/view/-/{book_id}/"
+    if not reader_base.endswith("/"):
+        reader_base += "/"
+
     result = []
     for ch in chapters:
         if isinstance(ch, str):
             if not any(ch.endswith(ext) for ext in (".xhtml", ".html", ".htm")):
                 continue
             result.append({
-                "url": f"/library/view/-/{book_id}/{ch}",
+                "url": f"{reader_base}{ch.lstrip('/')}",
                 "href": ch,
                 "title": ch.split("/")[-1].rsplit(".", 1)[0].replace("-", " ").replace("_", " "),
             })
@@ -309,7 +315,7 @@ def _normalize_epub_chapters(chapters: list, book_id: str) -> list:
             if "url" not in normalized and href:
                 normalized["url"] = (
                     href if href.startswith("http")
-                    else f"/library/view/-/{book_id}/{href.lstrip('/')}"
+                    else f"{reader_base}{href.lstrip('/')}"
                 )
             # Promote 'label' → 'title' for EPUB TOC entries
             if "title" not in normalized:
@@ -658,13 +664,28 @@ async def get_book(request: Request, book_id: str, token: str):
         # Discover alternative ISBNs for this book (e.g. EPUB isbn ≠ archive_id)
         alt_ids = await _discover_alt_ids(client, book_id)
 
+        # Resolve the real web-reader URL now (follows the /library/view/-/{id}/ redirect
+        # to get the book slug, e.g. /library/view/aws-certified-cloud/9798341640214/).
+        # This is needed so EPUB chapter hrefs are turned into working content URLs.
+        reader_base = f"/library/view/-/{book_id}/"
+        try:
+            probe = await client.get(
+                f"{OREILLY_BASE}/library/view/-/{book_id}/", timeout=10.0
+            )
+            if probe.is_success:
+                final_path = probe.url.path  # e.g. /library/view/aws-certified-cloud/9798341640214/
+                if "library/view" in final_path and book_id in final_path:
+                    reader_base = final_path if final_path.endswith("/") else final_path + "/"
+        except Exception:
+            pass
+
         # 2. Chapter-list API endpoints — try primary id then any alternatives
         for try_id in [book_id] + alt_ids:
             chapters = await _chapters_from_api(client, try_id)
             if chapters is not None:
                 # Ensure every entry has a usable 'url' (EPUB entries often have only 'href')
                 if chapters and isinstance(chapters[0], dict) and "url" not in chapters[0]:
-                    chapters = _normalize_epub_chapters(chapters, book_id)
+                    chapters = _normalize_epub_chapters(chapters, book_id, reader_base)
                 if chapters:
                     return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
 
@@ -719,8 +740,14 @@ async def _fetch_chapter_html(client: httpx.AsyncClient, url: str) -> str:
                 pass
         return html
 
-    # Raw HTML / XHTML
-    return resp.text
+    # Raw HTML / XHTML — reject obvious error pages before returning
+    html = resp.text
+    title_m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    page_title = title_m.group(1).strip().lower() if title_m else ""
+    bad_titles = ("errata", "not found", "page not found", "403 forbidden", "access denied", "sign in")
+    if any(t in page_title for t in bad_titles):
+        return ""
+    return html
 
 
 def _html_to_markdown(html: str) -> str:
