@@ -126,6 +126,45 @@
       color: #c0392b; border-radius: 7px;
       padding: .6rem .9rem; font-size: .85rem; margin-bottom: 1rem;
     }
+    /* ── Login tabs ──────────────────────────────────────────── */
+    .login-tabs {
+      display: flex; border-bottom: 2px solid var(--border);
+      margin-bottom: 1.4rem; gap: 0;
+    }
+    .login-tab {
+      flex: 1; padding: .55rem .5rem;
+      background: none; border: none;
+      font-size: .88rem; font-weight: 600; color: var(--gray);
+      cursor: pointer; border-bottom: 2px solid transparent;
+      margin-bottom: -2px; transition: color .15s, border-color .15s;
+      text-align: center;
+    }
+    .login-tab.active { color: var(--red); border-bottom-color: var(--red); }
+    .login-tab:hover:not(.active) { color: #333; }
+    /* ── SSO steps ───────────────────────────────────────────── */
+    .sso-steps {
+      background: #f7f7fa; border-radius: 8px;
+      padding: .9rem 1rem; margin-bottom: 1rem;
+      font-size: .8rem; color: #444; line-height: 1.8;
+    }
+    .sso-steps ol { padding-left: 1.2rem; }
+    .sso-steps li { margin-bottom: .15rem; }
+    .sso-steps code {
+      background: #eee; padding: 1px 5px; border-radius: 3px;
+      font-family: monospace; font-size: .85em; color: #c0392b;
+    }
+    .sso-steps a { color: var(--blue); font-weight: 600; }
+    .sso-note {
+      font-size: .76rem; color: var(--gray); margin-top: .6rem; line-height: 1.5;
+    }
+    .inp-token {
+      width: 100%; padding: .65rem .9rem;
+      border: 1.5px solid var(--border); border-radius: 8px;
+      outline: none; transition: border-color .2s;
+      background: #fafafa; font-family: monospace;
+      font-size: .82rem; word-break: break-all;
+    }
+    .inp-token:focus { border-color: var(--red); background: #fff; }
 
     /* ═══════════════════════════════════════════════════════════
        MAIN APP SCREEN
@@ -418,26 +457,56 @@
       <div class="brand">O'Reilly Downloader</div>
       <div class="sub">Download books from your subscription</div>
     </div>
-    <h2>Sign in to continue</h2>
+
+    <!-- Tabs -->
+    <div class="login-tabs">
+      <button class="login-tab active" id="tab-pw"  onclick="switchTab('pw')">Email &amp; Password</button>
+      <button class="login-tab"        id="tab-sso" onclick="switchTab('sso')">SSO / Institution</button>
+    </div>
+
     <div id="login-error" class="hidden"></div>
-    <form id="login-form" autocomplete="on">
-      <div class="form-group">
-        <label for="inp-email">O'Reilly email</label>
-        <input id="inp-email" type="email" placeholder="you@example.com" required autocomplete="username" />
+
+    <!-- Tab: Email + Password -->
+    <div id="pane-pw">
+      <form id="login-form" autocomplete="on">
+        <div class="form-group">
+          <label for="inp-email">O'Reilly email</label>
+          <input id="inp-email" type="email" placeholder="you@example.com" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="inp-pass">Password</label>
+          <input id="inp-pass" type="password" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button class="btn-primary" type="submit" id="btn-login">
+          <span id="login-spinner" class="spinner hidden"></span>
+          Sign In
+        </button>
+      </form>
+      <p class="login-note">Your credentials are sent directly to O'Reilly and never stored.</p>
+    </div>
+
+    <!-- Tab: SSO / Institutional -->
+    <div id="pane-sso" class="hidden">
+      <div class="sso-steps">
+        <strong>How to get your session token:</strong>
+        <ol>
+          <li>Open <a href="https://learning.oreilly.com" target="_blank">learning.oreilly.com</a> in your browser</li>
+          <li>Log in using your institution's SSO</li>
+          <li>Press <code>F12</code> to open DevTools</li>
+          <li>Go to <strong>Application</strong> → <strong>Cookies</strong> → <code>https://learning.oreilly.com</code></li>
+          <li>Find the cookie named <code>sessionid</code> and copy its <strong>Value</strong></li>
+        </ol>
       </div>
       <div class="form-group">
-        <label for="inp-pass">Password</label>
-        <input id="inp-pass" type="password" placeholder="••••••••" required autocomplete="current-password" />
+        <label for="inp-token">Paste your <code>sessionid</code> cookie value</label>
+        <input id="inp-token" class="inp-token" type="text" placeholder="e.g. abc123xyz..." autocomplete="off" spellcheck="false" />
       </div>
-      <button class="btn-primary" type="submit" id="btn-login">
-        <span id="login-spinner" class="spinner hidden"></span>
-        Sign In
+      <button class="btn-primary" id="btn-sso-login">
+        <span id="sso-spinner" class="spinner hidden"></span>
+        Continue with Session Token
       </button>
-    </form>
-    <p class="login-note">
-      Your credentials are sent directly to O'Reilly and are never stored on this server.<br>
-      An active O'Reilly Learning subscription is required.
-    </p>
+      <p class="sso-note">The token is valid until your browser session expires. You can get a fresh one by repeating the steps above.</p>
+    </div>
   </div>
 </div>
 
@@ -619,6 +688,32 @@ async function apiGet(path, params = {}) {
 /* ─────────────────────────────────────────────────────────────────────
    Login
 ───────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────
+   Login tab switching
+───────────────────────────────────────────────────────────────────── */
+function switchTab(tab) {
+  $('tab-pw').classList.toggle('active',  tab === 'pw');
+  $('tab-sso').classList.toggle('active', tab === 'sso');
+  $('pane-pw').classList.toggle('hidden',  tab !== 'pw');
+  $('pane-sso').classList.toggle('hidden', tab !== 'sso');
+  $('login-error').classList.add('hidden');
+}
+
+function _saveSession(token, name) {
+  state.token    = token;
+  state.userName = name;
+  localStorage.setItem('ort_token', token);
+  localStorage.setItem('ort_user',  name);
+  showApp();
+}
+
+function _showLoginError(msg) {
+  const el = $('login-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+/* Email + password login */
 $('login-form').addEventListener('submit', async e => {
   e.preventDefault();
   const email = $('inp-email').value.trim();
@@ -631,15 +726,31 @@ $('login-form').addEventListener('submit', async e => {
 
   try {
     const data = await apiPost('/api/login', { email, password: pass });
-    state.token    = data.token;
-    state.userName = data.name || email.split('@')[0];
-    localStorage.setItem('ort_token', state.token);
-    localStorage.setItem('ort_user',  state.userName);
-    showApp();
+    _saveSession(data.token, data.name || email.split('@')[0]);
   } catch (err) {
-    const el = $('login-error');
-    el.textContent = err.message;
-    el.classList.remove('hidden');
+    _showLoginError(err.message);
+  } finally {
+    btn.disabled = false;
+    sp.classList.add('hidden');
+  }
+});
+
+/* SSO / session-token login */
+$('btn-sso-login').addEventListener('click', async () => {
+  const token = $('inp-token').value.trim();
+  if (!token) { _showLoginError('Please paste your sessionid cookie value.'); return; }
+
+  $('login-error').classList.add('hidden');
+  const btn = $('btn-sso-login');
+  const sp  = $('sso-spinner');
+  btn.disabled = true;
+  sp.classList.remove('hidden');
+
+  try {
+    const data = await apiPost('/api/verify-token', { token });
+    _saveSession(data.token, data.name || 'User');
+  } catch (err) {
+    _showLoginError(err.message);
   } finally {
     btn.disabled = false;
     sp.classList.add('hidden');

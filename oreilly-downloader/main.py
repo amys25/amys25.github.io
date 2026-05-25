@@ -57,6 +57,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class TokenVerifyRequest(BaseModel):
+    token: str
+
+
 class DownloadRequest(BaseModel):
     token: str
     book_id: str
@@ -100,6 +104,32 @@ async def login(req: LoginRequest):
         name = req.email.split("@")[0]
 
     return {"token": sessionid, "name": name}
+
+
+@app.post("/api/verify-token")
+async def verify_token(req: TokenVerifyRequest):
+    """Validate a session cookie obtained via SSO/browser and return the user's name."""
+    async with _make_client(req.token) as client:
+        resp = await client.get(f"{OREILLY_BASE}/api/v2/me/")
+
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+    if not resp.is_success:
+        raise HTTPException(status_code=401, detail="Could not verify session token.")
+
+    try:
+        data = resp.json()
+        name = (
+            data.get("name")
+            or data.get("first_name")
+            or data.get("username")
+            or data.get("email", "").split("@")[0]
+            or "User"
+        )
+    except Exception:
+        name = "User"
+
+    return {"token": req.token, "name": name}
 
 
 @app.get("/api/search")
