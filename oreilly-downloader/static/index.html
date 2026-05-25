@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>O'Reilly Book Downloader</title>
+  <style>
+    /* ── Reset & base ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 15px; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4f4f6;
+      color: #1f1f1f;
+      min-height: 100vh;
+    }
+    :root {
+      --red:    #d43f00;
+      --red-dk: #a33000;
+      --red-lt: #fdf0eb;
+      --blue:   #2563eb;
+      --gray:   #6b7280;
+      --border: #e0e0e8;
+      --card:   #ffffff;
+      --shadow: 0 2px 12px rgba(0,0,0,.09);
+      --radius: 10px;
+    }
+
+    /* ── Utility ───────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+    .flex   { display: flex; }
+    .gap-2  { gap: .5rem; }
+    .gap-3  { gap: .75rem; }
+    button  { cursor: pointer; border: none; font-family: inherit; font-size: .9rem; }
+    input[type="text"], input[type="email"], input[type="password"], input[type="search"] {
+      font-family: inherit; font-size: .95rem;
+    }
+    a { color: var(--blue); }
+
+    /* ── Spinner ───────────────────────────────────────────────── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block; vertical-align: middle;
+    }
+    .spinner.dark {
+      border-color: rgba(0,0,0,.15);
+      border-top-color: var(--red);
+    }
+
+    /* ── Toast ─────────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: #222; color: #fff;
+      padding: .7rem 1.4rem; border-radius: 8px;
+      font-size: .88rem; z-index: 9999;
+      opacity: 0; transition: opacity .25s;
+      pointer-events: none;
+      max-width: 90vw; text-align: center;
+    }
+    #toast.show { opacity: 1; }
+    #toast.error { background: #c0392b; }
+    #toast.success { background: #27ae60; }
+
+    /* ═══════════════════════════════════════════════════════════
+       LOGIN SCREEN
+    ═══════════════════════════════════════════════════════════ */
+    #screen-login {
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, #1a0600 0%, #2c0a00 50%, #1a1a2e 100%);
+    }
+    .login-box {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 2.5rem 2.8rem;
+      width: 100%; max-width: 420px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.45);
+    }
+    .login-logo {
+      text-align: center; margin-bottom: 1.8rem;
+    }
+    .login-logo .brand {
+      font-size: 1.6rem; font-weight: 800;
+      color: var(--red);
+      letter-spacing: -.5px;
+    }
+    .login-logo .sub {
+      font-size: .82rem; color: var(--gray); margin-top: .2rem;
+    }
+    .login-box h2 {
+      font-size: 1.25rem; font-weight: 700; margin-bottom: 1.4rem; color: #111;
+    }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label {
+      display: block; font-size: .82rem; font-weight: 600;
+      color: #444; margin-bottom: .35rem;
+    }
+    .form-group input {
+      width: 100%; padding: .65rem .9rem;
+      border: 1.5px solid var(--border); border-radius: 8px;
+      outline: none; transition: border-color .2s;
+      background: #fafafa;
+    }
+    .form-group input:focus { border-color: var(--red); background: #fff; }
+    .btn-primary {
+      width: 100%; padding: .72rem;
+      background: var(--red); color: #fff;
+      border-radius: 8px; font-weight: 700;
+      font-size: 1rem; margin-top: .5rem;
+      transition: background .2s;
+      display: flex; align-items: center; justify-content: center; gap: .5rem;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--red-dk); }
+    .btn-primary:disabled { opacity: .7; cursor: not-allowed; }
+    .login-note {
+      font-size: .78rem; color: var(--gray); text-align: center; margin-top: 1.1rem;
+      line-height: 1.5;
+    }
+    #login-error {
+      background: #fdf0ec; border: 1px solid #f5b8a0;
+      color: #c0392b; border-radius: 7px;
+      padding: .6rem .9rem; font-size: .85rem; margin-bottom: 1rem;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       MAIN APP SCREEN
+    ═══════════════════════════════════════════════════════════ */
+    #screen-app { min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* ── Top bar ────────────────────────────────────────────── */
+    header {
+      background: #1a0600;
+      padding: .85rem 1.5rem;
+      display: flex; align-items: center; gap: 1rem;
+      position: sticky; top: 0; z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    .hdr-brand {
+      font-size: 1.1rem; font-weight: 800; color: var(--red);
+      white-space: nowrap; letter-spacing: -.3px;
+      flex-shrink: 0;
+    }
+    .search-bar {
+      flex: 1; display: flex; gap: .5rem; max-width: 640px;
+    }
+    .search-bar input {
+      flex: 1; padding: .55rem .9rem;
+      border: 1.5px solid rgba(255,255,255,.15);
+      border-radius: 8px; background: rgba(255,255,255,.1);
+      color: #fff; outline: none; transition: border-color .2s;
+    }
+    .search-bar input::placeholder { color: rgba(255,255,255,.45); }
+    .search-bar input:focus { border-color: var(--red); background: rgba(255,255,255,.15); }
+    .btn-search {
+      padding: .55rem 1.1rem;
+      background: var(--red); color: #fff;
+      border-radius: 8px; font-weight: 600;
+      transition: background .2s;
+    }
+    .btn-search:hover { background: var(--red-dk); }
+    .hdr-right {
+      margin-left: auto; display: flex; align-items: center; gap: .75rem; flex-shrink: 0;
+    }
+    .hdr-user {
+      font-size: .82rem; color: rgba(255,255,255,.65);
+      white-space: nowrap;
+    }
+    .btn-logout {
+      font-size: .8rem; color: rgba(255,255,255,.7);
+      background: rgba(255,255,255,.08);
+      padding: .35rem .8rem; border-radius: 6px;
+      transition: background .2s;
+    }
+    .btn-logout:hover { background: rgba(255,255,255,.18); color: #fff; }
+
+    /* ── Main content area ──────────────────────────────────── */
+    main { flex: 1; padding: 1.8rem; max-width: 1200px; margin: 0 auto; width: 100%; }
+
+    /* Landing / empty state */
+    .empty-state {
+      text-align: center; padding: 5rem 1rem;
+    }
+    .empty-state .icon {
+      font-size: 3.5rem; margin-bottom: 1rem;
+    }
+    .empty-state h2 {
+      font-size: 1.5rem; color: #333; margin-bottom: .6rem;
+    }
+    .empty-state p { color: var(--gray); font-size: .95rem; }
+
+    /* Results meta */
+    .results-meta {
+      font-size: .85rem; color: var(--gray); margin-bottom: 1.2rem;
+    }
+    .results-meta strong { color: #333; }
+
+    /* ── Book grid ──────────────────────────────────────────── */
+    .book-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 1.2rem;
+    }
+    .book-card {
+      background: var(--card); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow: hidden;
+      cursor: pointer; transition: transform .15s, box-shadow .15s;
+      display: flex; flex-direction: column;
+    }
+    .book-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.14);
+    }
+    .book-cover {
+      width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block;
+      background: linear-gradient(135deg, #f0e8d8, #d4c8b0);
+    }
+    .book-cover-placeholder {
+      width: 100%; aspect-ratio: 3/4;
+      background: linear-gradient(135deg, #2c0a00, #1a0600);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2.5rem;
+    }
+    .book-info { padding: .85rem .9rem; flex: 1; display: flex; flex-direction: column; gap: .3rem; }
+    .book-title { font-size: .88rem; font-weight: 700; color: #111; line-height: 1.35; }
+    .book-author { font-size: .76rem; color: var(--gray); }
+    .book-year { font-size: .72rem; color: #aaa; margin-top: auto; padding-top: .4rem; }
+
+    /* ── Pagination ─────────────────────────────────────────── */
+    .pagination {
+      display: flex; align-items: center; justify-content: center;
+      gap: .75rem; margin-top: 2rem;
+    }
+    .btn-page {
+      padding: .5rem 1.1rem; border-radius: 7px;
+      background: var(--card); border: 1.5px solid var(--border);
+      color: #444; font-weight: 600; font-size: .85rem;
+      transition: background .15s, border-color .15s;
+    }
+    .btn-page:hover:not(:disabled) { background: var(--red-lt); border-color: var(--red); color: var(--red); }
+    .btn-page:disabled { opacity: .4; cursor: default; }
+    .page-info { font-size: .85rem; color: var(--gray); }
+
+    /* ── Loading overlay on grid ─────────────────────────────── */
+    .grid-loading {
+      display: flex; align-items: center; justify-content: center;
+      padding: 4rem; gap: 1rem; color: var(--gray);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       BOOK DETAIL MODAL
+    ═══════════════════════════════════════════════════════════ */
+    #modal-overlay {
+      position: fixed; inset: 0; z-index: 500;
+      background: rgba(0,0,0,.65);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 2rem 1rem; overflow-y: auto;
+      backdrop-filter: blur(3px);
+    }
+    .modal {
+      background: var(--card);
+      border-radius: 14px;
+      width: 100%; max-width: 780px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      overflow: hidden;
+      position: relative;
+    }
+    .modal-close {
+      position: absolute; top: 1rem; right: 1rem; z-index: 10;
+      background: rgba(0,0,0,.08); color: #555;
+      width: 2rem; height: 2rem; border-radius: 50%;
+      font-size: 1.2rem; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .2s;
+    }
+    .modal-close:hover { background: rgba(0,0,0,.18); color: #111; }
+
+    /* Book header */
+    .modal-header {
+      display: flex; gap: 1.5rem; padding: 1.8rem 1.8rem 1.4rem;
+      background: linear-gradient(135deg, #1a0600 0%, #2c1200 100%);
+    }
+    .modal-cover {
+      width: 110px; min-width: 110px; height: 148px; object-fit: cover;
+      border-radius: 6px;
+      box-shadow: 0 4px 14px rgba(0,0,0,.5);
+    }
+    .modal-cover-ph {
+      width: 110px; min-width: 110px; height: 148px;
+      background: #2c0a00; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2.5rem;
+      box-shadow: 0 4px 14px rgba(0,0,0,.5);
+    }
+    .modal-meta { flex: 1; }
+    .modal-title {
+      font-size: 1.3rem; font-weight: 800; color: #fff;
+      line-height: 1.3; margin-bottom: .45rem;
+    }
+    .modal-authors { font-size: .86rem; color: rgba(255,255,255,.7); margin-bottom: .3rem; }
+    .modal-pub { font-size: .78rem; color: rgba(255,255,255,.5); margin-bottom: .7rem; }
+    .modal-desc {
+      font-size: .82rem; color: rgba(255,255,255,.62);
+      line-height: 1.55; max-height: 4.8em; overflow: hidden;
+    }
+
+    /* Chapter list */
+    .modal-body { padding: 1.4rem 1.8rem 1.8rem; }
+    .section-title {
+      font-size: .8rem; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--gray);
+      margin-bottom: .9rem;
+    }
+    .chapters-controls {
+      display: flex; gap: .6rem; margin-bottom: .9rem;
+    }
+    .btn-sm {
+      font-size: .78rem; padding: .3rem .75rem; border-radius: 6px;
+      border: 1.5px solid var(--border); background: var(--card);
+      color: #555; font-weight: 600; transition: all .15s;
+    }
+    .btn-sm:hover { border-color: var(--red); color: var(--red); background: var(--red-lt); }
+
+    .chapter-list {
+      max-height: 340px; overflow-y: auto;
+      border: 1.5px solid var(--border); border-radius: 8px;
+      background: #fafafa;
+    }
+    .chapter-item {
+      display: flex; align-items: flex-start; gap: .75rem;
+      padding: .65rem .9rem;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer; transition: background .1s;
+      user-select: none;
+    }
+    .chapter-item:last-child { border-bottom: none; }
+    .chapter-item:hover { background: var(--red-lt); }
+    .chapter-item input[type="checkbox"] { margin-top: .15rem; accent-color: var(--red); flex-shrink: 0; }
+    .ch-label { font-size: .88rem; color: #333; line-height: 1.4; }
+    .ch-num { font-size: .75rem; color: var(--gray); }
+    .no-chapters {
+      padding: 1.5rem; text-align: center; color: var(--gray); font-size: .88rem;
+    }
+
+    /* Download controls */
+    .download-section {
+      margin-top: 1.4rem;
+      background: #f7f7fa; border-radius: 10px;
+      padding: 1.1rem 1.3rem;
+      display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap;
+    }
+    .format-group {
+      display: flex; gap: .6rem; align-items: center; flex: 1;
+    }
+    .format-group label {
+      font-size: .82rem; font-weight: 600; color: #444; white-space: nowrap;
+    }
+    .format-pills { display: flex; gap: .4rem; }
+    .format-pill {
+      position: relative;
+    }
+    .format-pill input[type="radio"] {
+      position: absolute; opacity: 0; width: 0; height: 0;
+    }
+    .format-pill label {
+      display: flex; align-items: center; gap: .4rem;
+      padding: .38rem .9rem;
+      border: 1.5px solid var(--border);
+      border-radius: 20px; cursor: pointer;
+      font-size: .83rem; font-weight: 600; color: #555;
+      background: var(--card); transition: all .15s;
+    }
+    .format-pill input:checked + label {
+      background: var(--red); border-color: var(--red); color: #fff;
+    }
+    .format-pill label:hover { border-color: var(--red); color: var(--red); }
+    .format-pill input:checked + label:hover { color: #fff; }
+
+    .selected-count {
+      font-size: .8rem; color: var(--gray); white-space: nowrap;
+    }
+    .btn-download {
+      padding: .6rem 1.5rem;
+      background: var(--red); color: #fff;
+      border-radius: 8px; font-weight: 700; font-size: .92rem;
+      transition: background .2s;
+      display: flex; align-items: center; gap: .5rem;
+      white-space: nowrap;
+    }
+    .btn-download:hover:not(:disabled) { background: var(--red-dk); }
+    .btn-download:disabled { opacity: .6; cursor: not-allowed; }
+    .chapter-list::-webkit-scrollbar { width: 6px; }
+    .chapter-list::-webkit-scrollbar-track { background: transparent; }
+    .chapter-list::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+    /* ── Responsive ─────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      header { flex-wrap: wrap; }
+      .search-bar { order: 3; flex-basis: 100%; }
+      main { padding: 1rem .75rem; }
+      .book-grid { grid-template-columns: repeat(2, 1fr); gap: .75rem; }
+      .modal-header { flex-direction: column; align-items: center; text-align: center; }
+      .modal-cover, .modal-cover-ph { width: 90px; min-width: 90px; height: 121px; }
+      .download-section { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ──────────── LOGIN ──────────── -->
+<div id="screen-login">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="brand">O'Reilly Downloader</div>
+      <div class="sub">Download books from your subscription</div>
+    </div>
+    <h2>Sign in to continue</h2>
+    <div id="login-error" class="hidden"></div>
+    <form id="login-form" autocomplete="on">
+      <div class="form-group">
+        <label for="inp-email">O'Reilly email</label>
+        <input id="inp-email" type="email" placeholder="you@example.com" required autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="inp-pass">Password</label>
+        <input id="inp-pass" type="password" placeholder="••••••••" required autocomplete="current-password" />
+      </div>
+      <button class="btn-primary" type="submit" id="btn-login">
+        <span id="login-spinner" class="spinner hidden"></span>
+        Sign In
+      </button>
+    </form>
+    <p class="login-note">
+      Your credentials are sent directly to O'Reilly and are never stored on this server.<br>
+      An active O'Reilly Learning subscription is required.
+    </p>
+  </div>
+</div>
+
+<!-- ──────────── APP ──────────── -->
+<div id="screen-app" class="hidden">
+  <header>
+    <span class="hdr-brand">O'Reilly Downloader</span>
+    <div class="search-bar">
+      <input id="inp-search" type="search" placeholder="Search books… (e.g. Python, Kubernetes, React)" />
+      <button class="btn-search" id="btn-search">Search</button>
+    </div>
+    <div class="hdr-right">
+      <span class="hdr-user" id="hdr-user"></span>
+      <button class="btn-logout" id="btn-logout">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Empty / welcome state -->
+    <div id="empty-state" class="empty-state">
+      <div class="icon">📚</div>
+      <h2>Search for a book to get started</h2>
+      <p>Type a title, author, or topic in the search bar above.</p>
+    </div>
+
+    <!-- Results area -->
+    <div id="results-area" class="hidden">
+      <div id="results-meta" class="results-meta"></div>
+      <div id="book-grid" class="book-grid"></div>
+      <div id="pagination" class="pagination hidden">
+        <button class="btn-page" id="btn-prev" disabled>← Prev</button>
+        <span class="page-info" id="page-info"></span>
+        <button class="btn-page" id="btn-next">Next →</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ──────────── BOOK DETAIL MODAL ──────────── -->
+<div id="modal-overlay" class="hidden">
+  <div class="modal" id="modal">
+    <button class="modal-close" id="modal-close" title="Close">✕</button>
+
+    <!-- Header -->
+    <div class="modal-header" id="modal-header">
+      <div class="modal-cover-ph" id="modal-cover-wrap">📖</div>
+      <div class="modal-meta">
+        <div class="modal-title" id="modal-title"></div>
+        <div class="modal-authors" id="modal-authors"></div>
+        <div class="modal-pub" id="modal-pub"></div>
+        <div class="modal-desc" id="modal-desc"></div>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="modal-body">
+      <div class="section-title">Chapters</div>
+      <div class="chapters-controls">
+        <button class="btn-sm" id="btn-select-all">Select all</button>
+        <button class="btn-sm" id="btn-deselect-all">Deselect all</button>
+        <span class="selected-count" id="sel-count"></span>
+      </div>
+      <div class="chapter-list" id="chapter-list">
+        <div class="no-chapters">
+          <span class="spinner dark"></span>
+          &nbsp;Loading chapters…
+        </div>
+      </div>
+
+      <!-- Download controls -->
+      <div class="download-section">
+        <div class="format-group">
+          <label>Format:</label>
+          <div class="format-pills">
+            <div class="format-pill">
+              <input type="radio" name="fmt" id="fmt-md" value="md" checked />
+              <label for="fmt-md">📝 Markdown</label>
+            </div>
+            <div class="format-pill">
+              <input type="radio" name="fmt" id="fmt-pdf" value="pdf" />
+              <label for="fmt-pdf">📄 PDF</label>
+            </div>
+          </div>
+        </div>
+        <button class="btn-download" id="btn-download" disabled>
+          <span id="dl-spinner" class="spinner hidden"></span>
+          ⬇ Download
+        </button>
+      </div>
+
+      <div id="download-msg" style="margin-top:.75rem;font-size:.82rem;color:var(--gray);"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ──────────── TOAST ──────────── -->
+<div id="toast"></div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────
+   State
+───────────────────────────────────────────────────────────────────── */
+const state = {
+  token:        localStorage.getItem('ort_token') || null,
+  userName:     localStorage.getItem('ort_user')  || '',
+  query:        '',
+  page:         0,
+  total:        0,
+  perPage:      12,
+  currentBook:  null,   // raw API book object
+  chapters:     [],     // [{url, title, index}]
+  checked:      new Set(),
+};
+
+/* ─────────────────────────────────────────────────────────────────────
+   DOM refs
+───────────────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const screenLogin  = $('screen-login');
+const screenApp    = $('screen-app');
+const modalOverlay = $('modal-overlay');
+
+/* ─────────────────────────────────────────────────────────────────────
+   Toast
+───────────────────────────────────────────────────────────────────── */
+let _toastTimer = null;
+function toast(msg, type = '') {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = ''; }, 3500);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Show/hide screens
+───────────────────────────────────────────────────────────────────── */
+function showApp() {
+  screenLogin.classList.add('hidden');
+  screenApp.classList.remove('hidden');
+  $('hdr-user').textContent = state.userName ? `👤 ${state.userName}` : '';
+}
+function showLogin() {
+  screenApp.classList.add('hidden');
+  screenLogin.classList.remove('hidden');
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   API helpers
+───────────────────────────────────────────────────────────────────── */
+async function apiPost(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+async function apiGet(path, params = {}) {
+  const url = new URL(path, location.origin);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const r = await fetch(url);
+  if (!r.ok) {
+    if (r.status === 401) {
+      logout();
+      throw new Error('Session expired — please log in again.');
+    }
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Login
+───────────────────────────────────────────────────────────────────── */
+$('login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const email = $('inp-email').value.trim();
+  const pass  = $('inp-pass').value;
+  $('login-error').classList.add('hidden');
+  const btn = $('btn-login');
+  const sp  = $('login-spinner');
+  btn.disabled = true;
+  sp.classList.remove('hidden');
+
+  try {
+    const data = await apiPost('/api/login', { email, password: pass });
+    state.token    = data.token;
+    state.userName = data.name || email.split('@')[0];
+    localStorage.setItem('ort_token', state.token);
+    localStorage.setItem('ort_user',  state.userName);
+    showApp();
+  } catch (err) {
+    const el = $('login-error');
+    el.textContent = err.message;
+    el.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    sp.classList.add('hidden');
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   Logout
+───────────────────────────────────────────────────────────────────── */
+function logout() {
+  state.token = null;
+  localStorage.removeItem('ort_token');
+  localStorage.removeItem('ort_user');
+  showLogin();
+  $('book-grid').innerHTML = '';
+  $('results-area').classList.add('hidden');
+  $('empty-state').classList.remove('hidden');
+}
+$('btn-logout').addEventListener('click', logout);
+
+/* ─────────────────────────────────────────────────────────────────────
+   Search
+───────────────────────────────────────────────────────────────────── */
+async function doSearch(query, page = 0) {
+  state.query = query;
+  state.page  = page;
+
+  const grid = $('book-grid');
+  $('empty-state').classList.add('hidden');
+  $('results-area').classList.remove('hidden');
+  grid.innerHTML = `<div class="grid-loading"><span class="spinner dark"></span> Searching…</div>`;
+  $('pagination').classList.add('hidden');
+  $('results-meta').textContent = '';
+
+  try {
+    const data = await apiGet('/api/search', {
+      query, token: state.token,
+      page, limit: state.perPage,
+    });
+
+    const results = data.results || data.data || [];
+    state.total = data.total || results.length;
+
+    $('results-meta').innerHTML = `<strong>${state.total.toLocaleString()}</strong> results for <strong>"${escHtml(query)}"</strong>`;
+    renderBooks(results);
+    renderPagination();
+  } catch (err) {
+    grid.innerHTML = `<p style="color:#c0392b;padding:2rem">${escHtml(err.message)}</p>`;
+    toast(err.message, 'error');
+  }
+}
+
+$('btn-search').addEventListener('click', () => {
+  const q = $('inp-search').value.trim();
+  if (q) doSearch(q, 0);
+});
+$('inp-search').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const q = $('inp-search').value.trim(); if (q) doSearch(q, 0); }
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   Render book grid
+───────────────────────────────────────────────────────────────────── */
+function renderBooks(books) {
+  const grid = $('book-grid');
+  if (!books.length) {
+    grid.innerHTML = '<p style="padding:2rem;color:var(--gray)">No books found. Try a different search.</p>';
+    return;
+  }
+
+  grid.innerHTML = books.map(b => {
+    const id      = b.id || b.archive_id || '';
+    const title   = escHtml(b.title || 'Untitled');
+    const authors = escHtml((b.authors || []).map(a => a.name || a).join(', ') || 'Unknown author');
+    const year    = (b.issued || '').slice(0, 4) || '';
+    const cover   = b.cover_url || b.thumbnail_url || b.cover || '';
+
+    const coverHtml = cover
+      ? `<img class="book-cover" src="${escHtml(cover)}" alt="" loading="lazy" onerror="this.replaceWith(makePlaceholder())">`
+      : `<div class="book-cover-placeholder">📖</div>`;
+
+    return `<div class="book-card" data-id="${escHtml(id)}" title="${title}">
+      ${coverHtml}
+      <div class="book-info">
+        <div class="book-title">${title}</div>
+        <div class="book-author">${authors}</div>
+        ${year ? `<div class="book-year">${year}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.book-card').forEach(card => {
+    card.addEventListener('click', () => openBook(card.dataset.id));
+  });
+}
+
+function makePlaceholder() {
+  const d = document.createElement('div');
+  d.className = 'book-cover-placeholder';
+  d.textContent = '📖';
+  return d;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Pagination
+───────────────────────────────────────────────────────────────────── */
+function renderPagination() {
+  const totalPages = Math.ceil(state.total / state.perPage);
+  if (totalPages <= 1) { $('pagination').classList.add('hidden'); return; }
+
+  $('pagination').classList.remove('hidden');
+  $('btn-prev').disabled = state.page === 0;
+  $('btn-next').disabled = state.page >= totalPages - 1;
+  $('page-info').textContent = `Page ${state.page + 1} of ${totalPages}`;
+}
+$('btn-prev').addEventListener('click', () => doSearch(state.query, state.page - 1));
+$('btn-next').addEventListener('click', () => doSearch(state.query, state.page + 1));
+
+/* ─────────────────────────────────────────────────────────────────────
+   Open book detail modal
+───────────────────────────────────────────────────────────────────── */
+async function openBook(bookId) {
+  modalOverlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  state.checked.clear();
+
+  // Reset modal
+  $('modal-title').textContent   = 'Loading…';
+  $('modal-authors').textContent = '';
+  $('modal-pub').textContent     = '';
+  $('modal-desc').textContent    = '';
+  $('modal-cover-wrap').innerHTML = '📖';
+  $('modal-cover-wrap').className = 'modal-cover-ph';
+  $('chapter-list').innerHTML = '<div class="no-chapters"><span class="spinner dark"></span>&nbsp;Loading chapters…</div>';
+  $('btn-download').disabled = true;
+  $('download-msg').textContent = '';
+  updateSelCount();
+
+  try {
+    const book = await apiGet(`/api/book/${encodeURIComponent(bookId)}`, { token: state.token });
+    state.currentBook = book;
+    populateModal(book);
+  } catch (err) {
+    $('modal-title').textContent = 'Failed to load book';
+    $('chapter-list').innerHTML = `<div class="no-chapters" style="color:#c0392b">${escHtml(err.message)}</div>`;
+    toast(err.message, 'error');
+  }
+}
+
+function populateModal(book) {
+  const title   = book.title || 'Untitled';
+  const authors = (book.authors || []).map(a => a.name || a).join(', ') || 'Unknown';
+  const pub     = [book.publishers?.[0]?.name, (book.issued || '').slice(0,4)].filter(Boolean).join(' · ');
+  const desc    = stripTags(book.description || '');
+  const cover   = book.cover_url || book.thumbnail_url || book.cover || '';
+
+  $('modal-title').textContent   = title;
+  $('modal-authors').textContent = `By ${authors}`;
+  $('modal-pub').textContent     = pub;
+  $('modal-desc').textContent    = desc;
+
+  const wrap = $('modal-cover-wrap');
+  if (cover) {
+    wrap.outerHTML; // no-op, just reference
+    const img = document.createElement('img');
+    img.className = 'modal-cover';
+    img.src = cover;
+    img.alt = '';
+    img.id  = 'modal-cover-wrap';
+    img.onerror = () => {
+      const d = document.createElement('div');
+      d.className = 'modal-cover-ph'; d.id = 'modal-cover-wrap'; d.textContent = '📖';
+      img.replaceWith(d);
+    };
+    $('modal-cover-wrap').replaceWith(img);
+  }
+
+  // Extract chapter list
+  // Handles flat array, nested toc, or chapters with sub-items
+  const chapters = extractChapters(book);
+  state.chapters = chapters;
+  state.checked  = new Set(chapters.map(c => c.url)); // select all by default
+  renderChapterList();
+  $('btn-download').disabled = state.checked.size === 0;
+  updateSelCount();
+}
+
+function extractChapters(book) {
+  // O'Reilly API can return chapters in multiple shapes
+  const raw = book.chapters || book.toc || book.table_of_contents || [];
+
+  const flat = [];
+  let idx = 0;
+
+  function walk(items, depth = 0) {
+    for (const item of items) {
+      const url   = item.url || item.content_url || item.href || '';
+      const title = item.title || item.label || item.name || `Chapter ${idx + 1}`;
+      const natural = item.natural_key || item.natural_id || '';
+      // Build a usable URL for the content endpoint
+      const contentUrl = url || (natural ? `/api/v2/book/${book.id || book.archive_id}/chapter/${encodeURIComponent(natural)}/` : '');
+      if (contentUrl) {
+        flat.push({ url: contentUrl, title, depth, index: idx++ });
+      }
+      if (item.children && item.children.length) walk(item.children, depth + 1);
+    }
+  }
+
+  walk(raw);
+  return flat;
+}
+
+function renderChapterList() {
+  const list = $('chapter-list');
+  const chapters = state.chapters;
+  if (!chapters.length) {
+    list.innerHTML = '<div class="no-chapters">No chapter information available for this book.</div>';
+    return;
+  }
+
+  list.innerHTML = chapters.map(ch => {
+    const checked = state.checked.has(ch.url) ? 'checked' : '';
+    const indent  = ch.depth ? `padding-left:${ch.depth * 1.2 + 0.9}rem` : '';
+    return `<div class="chapter-item" data-url="${escHtml(ch.url)}" style="${indent}">
+      <input type="checkbox" ${checked} data-url="${escHtml(ch.url)}" />
+      <div>
+        <div class="ch-label">${escHtml(ch.title)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.chapter-item').forEach(row => {
+    row.addEventListener('click', e => {
+      const cb = row.querySelector('input[type="checkbox"]');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      toggleChapter(row.dataset.url, cb.checked);
+    });
+    row.querySelector('input').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleChapter(row.dataset.url, e.target.checked);
+    });
+  });
+}
+
+function toggleChapter(url, on) {
+  if (on) state.checked.add(url);
+  else    state.checked.delete(url);
+  $('btn-download').disabled = state.checked.size === 0;
+  updateSelCount();
+}
+
+function updateSelCount() {
+  const total = state.chapters.length;
+  const sel   = state.checked.size;
+  $('sel-count').textContent = total ? `${sel} of ${total} selected` : '';
+}
+
+/* Select / Deselect all */
+$('btn-select-all').addEventListener('click', () => {
+  state.chapters.forEach(c => state.checked.add(c.url));
+  $('chapter-list').querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+  $('btn-download').disabled = state.checked.size === 0;
+  updateSelCount();
+});
+$('btn-deselect-all').addEventListener('click', () => {
+  state.checked.clear();
+  $('chapter-list').querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+  $('btn-download').disabled = true;
+  updateSelCount();
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+   Download
+───────────────────────────────────────────────────────────────────── */
+$('btn-download').addEventListener('click', async () => {
+  const chapterUrls = [...state.checked];
+  if (!chapterUrls.length) { toast('Select at least one chapter.', 'error'); return; }
+
+  const format  = document.querySelector('input[name="fmt"]:checked').value;
+  const book    = state.currentBook;
+  const title   = book?.title || 'book';
+  const bookId  = book?.id || book?.archive_id || '';
+
+  const btn = $('btn-download');
+  const sp  = $('dl-spinner');
+  btn.disabled = true;
+  sp.classList.remove('hidden');
+  $('download-msg').textContent = `Fetching ${chapterUrls.length} chapter(s), please wait…`;
+
+  try {
+    const response = await fetch('/api/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token:        state.token,
+        book_id:      bookId,
+        chapter_urls: chapterUrls,
+        format,
+        title,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+
+    const blob     = await response.blob();
+    const filename = extractFilename(response, title, format);
+    triggerDownload(blob, filename);
+    toast(`Downloaded "${filename}" ✓`, 'success');
+    $('download-msg').textContent = `✓ Downloaded as ${filename}`;
+  } catch (err) {
+    toast(err.message, 'error');
+    $('download-msg').textContent = `Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    sp.classList.add('hidden');
+  }
+});
+
+function extractFilename(response, fallback, fmt) {
+  const cd = response.headers.get('Content-Disposition') || '';
+  const m  = cd.match(/filename="?([^";\n]+)"?/i);
+  if (m) return m[1];
+  const safe = fallback.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 60);
+  return `${safe}.${fmt}`;
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Close modal
+───────────────────────────────────────────────────────────────────── */
+function closeModal() {
+  modalOverlay.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+$('modal-close').addEventListener('click', closeModal);
+modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ─────────────────────────────────────────────────────────────────────
+   Utilities
+───────────────────────────────────────────────────────────────────── */
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function stripTags(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return div.textContent || div.innerText || '';
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Bootstrap — restore session if token is stored
+───────────────────────────────────────────────────────────────────── */
+if (state.token) {
+  showApp();
+} else {
+  showLogin();
+}
+</script>
+</body>
+</html>
