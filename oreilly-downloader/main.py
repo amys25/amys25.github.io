@@ -13,6 +13,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -47,11 +48,25 @@ BASE_HEADERS = {
 }
 
 
-def _make_client(token: str) -> httpx.AsyncClient:
-    # Send token under both names — O'Reilly uses 'groot_sessionid' in newer
-    # versions and 'sessionid' in older ones.
+def _parse_cookie_str(raw: str) -> dict:
+    """Parse a browser Cookie header string into a dict."""
+    out = {}
+    for part in raw.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, _, v = part.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _make_client(token: str, extra_cookies: str = "") -> httpx.AsyncClient:
+    # Start with the session token under both known names.
+    cookies: dict = {"sessionid": token, "groot_sessionid": token}
+    # Merge any additional cookies the caller supplied (full browser Cookie header).
+    if extra_cookies:
+        cookies.update(_parse_cookie_str(extra_cookies))
     return httpx.AsyncClient(
-        cookies={"sessionid": token, "groot_sessionid": token},
+        cookies=cookies,
         headers=BASE_HEADERS,
         follow_redirects=True,
         timeout=httpx.Timeout(30.0, read=90.0),
@@ -73,6 +88,7 @@ class TokenVerifyRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     token: str
+    extra_cookies: str = ""   # full browser Cookie header string (optional)
     book_id: str
     chapter_urls: List[str]   # full or relative chapter API URLs
     format: str               # "md" | "pdf"
@@ -178,10 +194,11 @@ def _check_auth(resp) -> None:
 
 
 @app.get("/api/search")
-async def search(query: str, token: str, page: int = 0, limit: int = 12):
+async def search(request: Request, query: str, token: str, page: int = 0, limit: int = 12):
     """Search O'Reilly for books matching *query*."""
+    xc = request.headers.get("X-Session-Cookies", "")
     try:
-        async with _make_client(token) as client:
+        async with _make_client(token, xc) as client:
             resp = await client.get(
                 f"{OREILLY_BASE}/api/v2/search/",
                 params={
@@ -292,10 +309,57 @@ async def _chapters_from_web_reader(client: httpx.AsyncClient, book_id: str) -> 
     return []
 
 
+@app.get("/api/debug/{book_id:path}")
+async def debug_book(request: Request, book_id: str, token: str):
+    """Diagnostic endpoint: probes every URL and reports HTTP status + structure."""
+    xc = request.headers.get("X-Session-Cookies", "")
+    probe_urls = [
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/chapter/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/flat-toc/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v1/book/{book_id}/",
+        f"{OREILLY_BASE}/api/v1/book/{book_id}/chapter/",
+        f"{OREILLY_BASE}/library/view/-/{book_id}/",
+    ]
+    results = {}
+    async with _make_client(token, xc) as client:
+        for url in probe_urls:
+            key = url.replace(OREILLY_BASE, "")
+            try:
+                r = await client.get(url, timeout=10.0)
+                ct = r.headers.get("content-type", "")
+                info: dict = {"status": r.status_code, "content_type": ct[:80],
+                              "final_url": str(r.url)}
+                if r.is_success:
+                    if "json" in ct:
+                        try:
+                            d = r.json()
+                            if isinstance(d, dict):
+                                info["json_keys"] = sorted(d.keys())
+                            elif isinstance(d, list):
+                                info["list_len"] = len(d)
+                                if d and isinstance(d[0], dict):
+                                    info["item_keys"] = sorted(d[0].keys())
+                        except Exception as e:
+                            info["json_error"] = str(e)
+                    elif "html" in ct:
+                        html = r.text
+                        info["html_bytes"] = len(html)
+                        info["has___NEXT_DATA__"] = "__NEXT_DATA__" in html
+                        info["has_toc_key"] = '"toc"' in html
+                        info["has_chapters_key"] = '"chapters"' in html
+            except Exception as e:
+                info = {"error": str(e)}
+            results[key] = info
+    return {"book_id": book_id, "extra_cookies_sent": bool(xc), "results": results}
+
+
 @app.get("/api/book/{book_id:path}")
-async def get_book(book_id: str, token: str):
+async def get_book(request: Request, book_id: str, token: str):
     """Return full book metadata + chapter list using a cascade of fallbacks."""
-    async with _make_client(token) as client:
+    xc = request.headers.get("X-Session-Cookies", "")
+    async with _make_client(token, xc) as client:
         # 1. Book-detail endpoint — works for older ISBNs, has metadata + chapters
         for url in (
             f"{OREILLY_BASE}/api/v2/book/{book_id}/",
@@ -459,7 +523,7 @@ async def download(req: DownloadRequest):
     if req.format not in ("md", "pdf"):
         raise HTTPException(400, f"Unknown format '{req.format}'. Use 'md' or 'pdf'.")
 
-    async with _make_client(req.token) as client:
+    async with _make_client(req.token, req.extra_cookies) as client:
         html_parts = []
         for url in req.chapter_urls:
             html = await _fetch_chapter_html(client, url)
