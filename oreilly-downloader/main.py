@@ -238,6 +238,11 @@ async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | 
         f"{OREILLY_BASE}/api/v2/titles/{book_id}/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/chapter/",
         f"{OREILLY_BASE}/api/v1/book/{book_id}/",
+        # EPUB-specific endpoints
+        f"{OREILLY_BASE}/api/v2/epubs/orm:{book_id}/",
+        f"{OREILLY_BASE}/api/v2/epubs/{book_id}/",
+        f"{OREILLY_BASE}/api/v2/epubs/{book_id}/toc/",
+        f"{OREILLY_BASE}/api/v2/book/{book_id}/epub/",
     ]
     for url in candidates:
         try:
@@ -308,6 +313,21 @@ async def _chapters_from_web_reader(client: httpx.AsyncClient, book_id: str) -> 
             continue
 
         html = resp.text
+
+        # 0. Parse __NEXT_DATA__ — Next.js server-side initial props.
+        #    O'Reilly's reader is a Next.js app; SSR props often include the full TOC.
+        nd_match = re.search(
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+            html, re.DOTALL,
+        )
+        if nd_match:
+            try:
+                nd = _json.loads(nd_match.group(1))
+                found = _find_chapters_in(nd)
+                if found:
+                    return found
+            except Exception:
+                pass
 
         # 1. Try every <script> tag — parse content as JSON or look for
         #    window.VAR = <json> and window.VAR = [<json>] assignments.
@@ -386,7 +406,10 @@ async def debug_book(request: Request, book_id: str, token: str):
         f"{OREILLY_BASE}/api/v2/book/orm:{book_id}/",
         f"{OREILLY_BASE}/api/v2/titles/{book_id}/toc/",
         f"{OREILLY_BASE}/api/v2/titles/{book_id}/",
-        # EPub / content package endpoints
+        # EPUB-specific endpoints
+        f"{OREILLY_BASE}/api/v2/epubs/orm:{book_id}/",
+        f"{OREILLY_BASE}/api/v2/epubs/{book_id}/",
+        f"{OREILLY_BASE}/api/v2/epubs/{book_id}/toc/",
         f"{OREILLY_BASE}/api/v2/book/{book_id}/epub/",
         f"{OREILLY_BASE}/library/view/-/{book_id}/",
     ]
@@ -420,6 +443,25 @@ async def debug_book(request: Request, book_id: str, token: str):
                         info["window_vars"] = re.findall(r'window\.(\w+)\s*=', html)[:20]
                         info["script_types"] = list(set(
                             re.findall(r'<script[^>]+type=["\']([^"\']+)["\']', html)))
+                        # Parse __NEXT_DATA__ (Next.js SSR props)
+                        nd_m = re.search(
+                            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+                            html, re.DOTALL,
+                        )
+                        if nd_m:
+                            try:
+                                nd = _json.loads(nd_m.group(1))
+                                info["__NEXT_DATA__keys"] = sorted(nd.keys())
+                                pp = nd.get("props", {}).get("pageProps", {})
+                                if isinstance(pp, dict):
+                                    info["pageProps_keys"] = sorted(pp.keys())
+                                    # Show book sub-keys if present
+                                    for bk in ("book", "bookData", "initialData"):
+                                        bv = pp.get(bk)
+                                        if isinstance(bv, dict):
+                                            info[f"pageProps.{bk}_keys"] = sorted(bv.keys())
+                            except Exception as ex:
+                                info["__NEXT_DATA__parse_error"] = str(ex)
                         # Parse window.orm (the Redux initial state) and show its
                         # top-level keys + any keys that look book/toc related
                         for wm in re.finditer(r'window\.orm\s*=\s*', html):
@@ -443,25 +485,91 @@ async def debug_book(request: Request, book_id: str, token: str):
             results[key] = info
     # Also fetch the search result for this book to expose all its fields —
     # it might contain a chapters_url or content_url we haven't tried.
+    alt_ids: list[str] = []
     try:
-        sr = await _make_client(token, xc).__aenter__()
-        search_resp = await sr.get(
-            f"{OREILLY_BASE}/api/v2/search/",
-            params={"query": book_id, "formats": "book", "limit": "5"},
-        )
-        await sr.aclose()
-        if search_resp.is_success:
-            for item in search_resp.json().get("results", []):
-                if book_id in str(item.get("id", "")) or book_id in str(item.get("archive_id", "")):
-                    results["_search_result_fields"] = {
-                        k: v for k, v in item.items()
-                        if not isinstance(v, str) or len(v) < 300
-                    }
-                    break
+        async with _make_client(token, xc) as src:
+            search_resp = await src.get(
+                f"{OREILLY_BASE}/api/v2/search/",
+                params={"query": book_id, "formats": "book", "limit": "5"},
+            )
+            if search_resp.is_success:
+                for item in search_resp.json().get("results", []):
+                    if book_id in str(item.get("id", "")) or book_id in str(item.get("archive_id", "")):
+                        results["_search_result_fields"] = {
+                            k: v for k, v in item.items()
+                            if not isinstance(v, str) or len(v) < 300
+                        }
+                        for field in ("isbn", "archive_id"):
+                            val = str(item.get(field, "")).strip()
+                            if val and val != book_id:
+                                alt_ids.append(val)
+                        break
     except Exception as e:
         results["_search_result_error"] = str(e)
 
+    # Probe EPUB/TOC endpoints using alternative ISBNs found in the search result
+    if alt_ids:
+        results["_alt_ids_discovered"] = alt_ids
+        async with _make_client(token, xc) as altc:
+            for alt_id in alt_ids:
+                for path in (
+                    f"/api/v2/book/{alt_id}/",
+                    f"/api/v2/book/{alt_id}/chapter/",
+                    f"/api/v2/book/{alt_id}/flat-toc/",
+                    f"/api/v2/book/{alt_id}/toc/",
+                    f"/api/v1/book/{alt_id}/chapter/",
+                    f"/api/v2/epubs/orm:{alt_id}/",
+                    f"/api/v2/epubs/{alt_id}/",
+                ):
+                    key = f"[alt:{alt_id}]{path}"
+                    try:
+                        r = await altc.get(f"{OREILLY_BASE}{path}", timeout=10.0)
+                        ct = r.headers.get("content-type", "")
+                        info: dict = {"status": r.status_code, "content_type": ct[:80]}
+                        if r.is_success and "json" in ct:
+                            try:
+                                d = r.json()
+                                if isinstance(d, dict):
+                                    info["json_keys"] = sorted(d.keys())
+                                elif isinstance(d, list):
+                                    info["list_len"] = len(d)
+                                    if d and isinstance(d[0], dict):
+                                        info["item_keys"] = sorted(d[0].keys())
+                            except Exception:
+                                pass
+                        results[key] = info
+                    except Exception as e:
+                        results[key] = {"error": str(e)}
+
     return {"book_id": book_id, "extra_cookies_sent": bool(xc), "results": results}
+
+
+async def _discover_alt_ids(client: httpx.AsyncClient, book_id: str) -> list[str]:
+    """
+    Search O'Reilly for *book_id* and return any alternative ISBNs/IDs found
+    in the search result (e.g. the `isbn` field differs from `archive_id`).
+    """
+    alt_ids: list[str] = []
+    try:
+        sr = await client.get(
+            f"{OREILLY_BASE}/api/v2/search/",
+            params={"query": book_id, "formats": "book", "limit": "5"},
+            timeout=10.0,
+        )
+        if not sr.is_success:
+            return alt_ids
+        for item in sr.json().get("results", []):
+            item_id = str(item.get("id", ""))
+            archive_id = str(item.get("archive_id", ""))
+            if book_id not in item_id and book_id not in archive_id:
+                continue
+            for field in ("isbn", "archive_id"):
+                val = str(item.get(field, "")).strip()
+                if val and val != book_id and val not in alt_ids:
+                    alt_ids.append(val)
+    except Exception:
+        pass
+    return alt_ids
 
 
 @app.get("/api/book/{book_id:path}")
@@ -481,14 +589,19 @@ async def get_book(request: Request, book_id: str, token: str):
             _check_auth(resp)
             if resp.is_success:
                 try:
-                    return resp.json()
+                    data = resp.json()
+                    return data
                 except Exception:
                     pass
 
-        # 2. Chapter-list API endpoints (newer books, various patterns)
-        chapters = await _chapters_from_api(client, book_id)
-        if chapters is not None:
-            return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
+        # Discover alternative ISBNs for this book (e.g. EPUB isbn ≠ archive_id)
+        alt_ids = await _discover_alt_ids(client, book_id)
+
+        # 2. Chapter-list API endpoints — try primary id then any alternatives
+        for try_id in [book_id] + alt_ids:
+            chapters = await _chapters_from_api(client, try_id)
+            if chapters is not None:
+                return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
 
         # 3. Web-reader HTML scrape — works for anything the browser can open
         chapters = await _chapters_from_web_reader(client, book_id)
