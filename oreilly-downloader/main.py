@@ -260,10 +260,18 @@ async def _chapters_from_api(client: httpx.AsyncClient, book_id: str) -> list | 
         if isinstance(data, list) and data:
             return data
         if isinstance(data, dict):
-            for key in ("chapters", "results", "toc", "table_of_contents", "items"):
+            for key in ("chapters", "results", "toc", "table_of_contents", "items", "spine", "files"):
                 val = data.get(key)
                 if isinstance(val, list) and val:
                     return val
+                if isinstance(val, dict) and val:
+                    items = list(val.values())
+                    if items and isinstance(items[0], dict):
+                        return items
+            # Final fallback: recursive scan for anything chapter-like
+            found = _find_chapters_in(data)
+            if found:
+                return found
     return None
 
 
@@ -272,6 +280,46 @@ def _looks_like_chapter(obj: object) -> bool:
     if not isinstance(obj, dict):
         return False
     return bool({"url", "href", "title", "filename", "natural_key", "id"} & obj.keys())
+
+
+def _normalize_epub_chapters(chapters: list, book_id: str) -> list:
+    """
+    Ensure every chapter entry has a 'url' field so the download flow can fetch it.
+    EPUB entries typically have 'href' (relative path) but no 'url'.
+    """
+    result = []
+    for ch in chapters:
+        if isinstance(ch, str):
+            if not any(ch.endswith(ext) for ext in (".xhtml", ".html", ".htm")):
+                continue
+            result.append({
+                "url": f"/library/view/-/{book_id}/{ch}",
+                "href": ch,
+                "title": ch.split("/")[-1].rsplit(".", 1)[0].replace("-", " ").replace("_", " "),
+            })
+        elif isinstance(ch, dict):
+            href = ch.get("href") or ch.get("url") or ch.get("filename") or ""
+            # Skip non-HTML resources (images, CSS, fonts…)
+            media = ch.get("media_type", "") or ch.get("content_format", "")
+            if href and not href.startswith("http") and "html" not in media.lower():
+                if not any(href.endswith(ext) for ext in (".xhtml", ".html", ".htm")):
+                    continue
+            normalized = dict(ch)
+            # Add 'url' if missing
+            if "url" not in normalized and href:
+                normalized["url"] = (
+                    href if href.startswith("http")
+                    else f"/library/view/-/{book_id}/{href.lstrip('/')}"
+                )
+            # Promote 'label' → 'title' for EPUB TOC entries
+            if "title" not in normalized:
+                normalized["title"] = (
+                    ch.get("label") or ch.get("name")
+                    or href.split("/")[-1].rsplit(".", 1)[0].replace("-", " ")
+                )
+            if normalized.get("url"):
+                result.append(normalized)
+    return result
 
 
 def _find_chapters_in(obj: object, depth: int = 0) -> list | None:
@@ -428,6 +476,19 @@ async def debug_book(request: Request, book_id: str, token: str):
                             d = r.json()
                             if isinstance(d, dict):
                                 info["json_keys"] = sorted(d.keys())
+                                # For EPUB API: show field types + first items
+                                if "/epubs/" in url:
+                                    for field in ("chapters", "table_of_contents", "spine", "files", "resources"):
+                                        val = d.get(field)
+                                        if val is None:
+                                            info[f"epub_{field}"] = "null"
+                                        elif isinstance(val, list):
+                                            info[f"epub_{field}_len"] = len(val)
+                                            info[f"epub_{field}_first2"] = val[:2]
+                                        elif isinstance(val, dict):
+                                            info[f"epub_{field}_type"] = f"dict({len(val)} keys)"
+                                            first_vals = list(val.values())[:2]
+                                            info[f"epub_{field}_first2"] = first_vals
                             elif isinstance(d, list):
                                 info["list_len"] = len(d)
                                 if d and isinstance(d[0], dict):
@@ -601,7 +662,11 @@ async def get_book(request: Request, book_id: str, token: str):
         for try_id in [book_id] + alt_ids:
             chapters = await _chapters_from_api(client, try_id)
             if chapters is not None:
-                return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
+                # Ensure every entry has a usable 'url' (EPUB entries often have only 'href')
+                if chapters and isinstance(chapters[0], dict) and "url" not in chapters[0]:
+                    chapters = _normalize_epub_chapters(chapters, book_id)
+                if chapters:
+                    return {"id": book_id, "title": "", "authors": [], "chapters": chapters}
 
         # 3. Web-reader HTML scrape — works for anything the browser can open
         chapters = await _chapters_from_web_reader(client, book_id)
